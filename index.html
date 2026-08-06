@@ -1346,10 +1346,14 @@ function rowToPR(row, itemRows){
 async function savePRToSupabase(pr){
   if(!sb) return;
   try{
-    await sb.from('purchase_requests').upsert(prToRow(pr));
+    const { error: e1 } = await sb.from('purchase_requests').upsert(prToRow(pr));
+    if(e1) throw e1;
     const itemRows = pr.items.map((it,idx)=>itemToRow(pr, it, idx));
-    if(itemRows.length) await sb.from('pr_items').upsert(itemRows);
-  }catch(e){ console.error('savePRToSupabase failed', e); showToast('Could not save to the database: '+(e.message||e)); }
+    if(itemRows.length){
+      const { error: e2 } = await sb.from('pr_items').upsert(itemRows);
+      if(e2) throw e2;
+    }
+  }catch(e){ console.error('savePRToSupabase failed', e); showToast('Could not save to the database: '+(e.message||JSON.stringify(e))); }
 }
 async function loadAllPRsFromSupabase(){
   if(!sb) return;
