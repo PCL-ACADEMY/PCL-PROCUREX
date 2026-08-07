@@ -1998,7 +1998,6 @@ function viewNewRequest(){
       <div class="field"><label>Date needed</label><input id="nrDate" type="date" value="${esc(nrDraft.dateNeeded)}" oninput="nrDraft.dateNeeded=this.value"></div>
       ${itemRowsHtml(nrDraft,'nr')}
       <div class="field"><label>Purpose of request</label><textarea id="nrPurpose" rows="3" placeholder="Why this is needed…" oninput="nrDraft.purpose=this.value">${esc(nrDraft.purpose)}</textarea></div>
-      ${signatureBlockHtml(nrDraft.signature, 'nrEditSignature()', "Requisitioner's e-signature")}
       <button class="btn btn-primary" onclick="submitNewRequest()">Submit request</button>
     </div>
   </div>`;
@@ -2011,10 +2010,9 @@ function submitNewRequest(){
   if(!touched.length){ showToast('Add at least one item before submitting.'); return; }
   if(touched.some(it=>!it.itemType.trim())){ showToast('Select a category and item for every row before submitting.'); return; }
   const items = touched.map((it,i)=>({...it, itemNo:i+1}));
-  if(!nrDraft.signature){ showToast("Please attach the requisitioner's e-signature before submitting."); return; }
   const pr = makePR({
     items, purpose: nrDraft.purpose, site: currentUser.site, notedBy: currentUser.name,
-    signature: nrDraft.signature, requiredDate: nrDraft.dateNeeded,
+    requiredDate: nrDraft.dateNeeded,
     requestorName: requisitionerName, dateSubmitted: todayStr(),
   });
   pr.audit.push(logEntry('Request submitted'), logEntry('Approved by Department Head'), logEntry('Received by Procurement — pending review'));
@@ -2053,7 +2051,6 @@ function viewNewRequestProc(){
       <div class="field"><label>Date needed</label><input id="npDate" type="date" value="${esc(npDraft.dateNeeded)}" oninput="npDraft.dateNeeded=this.value"></div>
       ${itemRowsHtml(npDraft,'np')}
       <div class="field"><label>Purpose of request</label><textarea id="npPurpose" rows="3" placeholder="Why this is needed…" oninput="npDraft.purpose=this.value">${esc(npDraft.purpose)}</textarea></div>
-      ${signatureBlockHtml(npDraft.signature, 'npEditSignature()', "Requisitioner's e-signature")}
       <button class="btn btn-primary" onclick="submitNewRequestProc()">Submit request</button>
     </div>
   </div>`;
@@ -2066,10 +2063,9 @@ function submitNewRequestProc(){
   if(!touched.length){ showToast('Add at least one item before submitting.'); return; }
   if(touched.some(it=>!it.itemType.trim())){ showToast('Select a category and item for every row before submitting.'); return; }
   const items = touched.map((it,i)=>({...it, itemNo:i+1}));
-  if(!npDraft.signature){ showToast("Attach the requisitioner's e-signature before submitting."); return; }
   const pr = makePR({
     items, purpose: npDraft.purpose, site: npDraft.site, notedBy: siteHead(npDraft.site),
-    signature: npDraft.signature, requiredDate: npDraft.dateNeeded,
+    requiredDate: npDraft.dateNeeded,
     requestorName, dateSubmitted: todayStr(),
   });
   pr.audit.push(logEntry('Request submitted on behalf of '+requestorName), logEntry('Received by Procurement — pending review'));
