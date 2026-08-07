@@ -40,7 +40,7 @@ input,select,textarea{font-family:var(--sans);}
 
 /* ---------- LOGIN ---------- */
 #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(180deg,#D9D9DB 0%,#C41230 40%,#000000 100%);}
-#session-loading-bar{position:fixed;inset:0;width:100%;height:100%;background:#fff;z-index:9999;display:none;align-items:center;justify-content:center;}
+#session-loading-bar{position:fixed;inset:0;width:100%;height:100%;background:#e5e5e5;z-index:9999;display:none;align-items:center;justify-content:center;}
 #session-loading-bar video{width:360px;max-width:60vw;height:auto;object-fit:contain;}
 .login-card{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:36px 34px 30px;position:relative;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.06);}
 .login-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:repeating-linear-gradient(90deg,var(--accent) 0 14px, transparent 14px 22px);}
@@ -4319,8 +4319,9 @@ async function restoreSessionOnLoad(){
   document.getElementById('login-screen').style.display = 'none';
   showSessionLoadingBar(true);
   currentUser = saved;
+  const minDelay = new Promise(resolve=>setTimeout(resolve, 2000));
   try{
-    await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase()]);
+    await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), minDelay]);
   }catch(e){ /* the load functions already surface their own error toasts */ }
   showSessionLoadingBar(false);
   enterApp();
