@@ -1274,7 +1274,7 @@ async function doLogin(){
   }
   currentUser = { name: match.name, role: match.role, email: match.email, site: match.site, signature: match.signature||null };
   saveSession(currentUser);
-  await loadAllPRsFromSupabase();
+  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase()]);
   enterApp();
 }
 function doLogout(){
@@ -1319,7 +1319,7 @@ async function flushDirtyPRs(){
 function prItemRowId(prId, idx){ return prId + '#' + idx; }
 function prToRow(pr){
   return { id: pr.id, pr_number: pr.prNumber, site: pr.site, requestor_name: pr.requestorName,
-    noted_by: pr.notedBy, signature: pr.signature, purpose: pr.purpose,
+    noted_by: pr.notedBy, purpose: pr.purpose,
     date_submitted: pr.dateSubmitted, required_date: pr.requiredDate, audit: pr.audit||[] };
 }
 function itemToRow(pr, it, idx){
@@ -1356,7 +1356,7 @@ function rowToPR(row, itemRows){
     return ai-bi;
   });
   return makePR({ id: row.id, prNumber: row.pr_number, site: row.site, requestorName: row.requestor_name,
-    notedBy: row.noted_by, signature: row.signature, purpose: row.purpose,
+    notedBy: row.noted_by, purpose: row.purpose,
     dateSubmitted: row.date_submitted, requiredDate: row.required_date, audit: row.audit||[],
     items: itemRows.map(rowToItem) });
 }
@@ -1389,12 +1389,12 @@ async function loadAllPRsFromSupabase(){
 setInterval(async ()=>{
   if(!sb || !currentUser) return;
   if(ui.openItem || ui.openDoc) return;
-  if(dirtyPRIds.size) return; // don't clobber a save that's about to go out
-  await loadAllPRsFromSupabase();
+  if(dirtyPRIds.size || dirtyPOIds.size || dirtyAEFIds.size) return; // don't clobber a save that's about to go out
+  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase()]);
   renderSidebar(); renderContent();
 }, 20000);
 
-function getPO(id){ return POS.find(p=>p.id===id); }
+function getPO(id){ const po = POS.find(p=>p.id===id); if(po) markPODirty(id); return po; }
 function signatureForName(name){ if(!name) return null; const acct = ACCOUNTS.find(a=>a.name===name); return acct ? acct.signature : null; }
 // Signatures may now be stored as a Supabase Storage URL instead of an embedded base64
 // data URI. jsPDF's addImage() needs actual image data, not a URL — so for PDF export,
@@ -1415,10 +1415,20 @@ async function toDataUri(src){
     });
   }catch(e){ return null; }
 }
-function getAEF(id){ return AEFS.find(a=>a.id===id); }
+function getAEF(id){ const aef = AEFS.find(a=>a.id===id); if(aef) markAEFDirty(id); return aef; }
 function findItem(prId, idx){ const pr=getPR(prId); if(pr) markPRDirty(prId); return pr ? {pr, it: pr.items[idx], idx} : null; }
 function money(n){ return n==null ? '—' : '₱'+Number(n).toLocaleString('en-PH',{maximumFractionDigits:0}); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Someone pasting a link often skips the "https://" — without it, a browser treats
+// "drive.google.com/..." as a *relative* path on this page instead of a real URL,
+// so the link silently goes nowhere. This adds https:// only when no protocol is present.
+function normalizeUrl(link){
+  if(!link) return '';
+  const trimmed = link.trim();
+  if(!trimmed) return '';
+  if(/^mailto:/i.test(trimmed)) return trimmed;
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : 'https://'+trimmed;
+}
 let toastTimer = null;
 function showToast(message){
   const toast = document.getElementById('toast');
@@ -2953,7 +2963,7 @@ function renderItemDrawer(){
       ${it.canvassVendors.map((v,vi)=>`<div class="quote-row">
         <div>${esc(v.name)}${it.vendor===v.name?' <span class="badge b-good" style="margin-left:4px;">Selected</span>':''}${v.itemName?`<div style="font-size:10.5px;color:var(--text-faint);margin-top:2px;">${esc(v.itemName)}</div>`:''}</div>
         <div>${money(v.price)}</div><div>${esc(v.terms)}</div><div>${esc(v.warranty)}</div><div>${esc(v.leadTime)}</div>
-        <div>${v.quotationLink?`<a href="${esc(v.quotationLink)}" target="_blank" rel="noopener">View ↗</a>`:'—'}</div>
+        <div>${v.quotationLink?`<a href="${esc(normalizeUrl(v.quotationLink))}" target="_blank" rel="noopener">View ↗</a>`:'—'}</div>
         <div>${currentUser.role==='procurement'?`<button class="btn btn-sm" onclick="showEditQuoteForm('${pr.id}',${idx},${vi})">Edit</button> <button class="btn btn-sm" onclick="removeVendorQuote('${pr.id}',${idx},${vi})">Remove</button>`:''}</div>
       </div>`).join('')}` : ''}
       ${it.procurementApproach ? `
@@ -3470,6 +3480,7 @@ function assignItemToPO(pr, it, idx){
   po.lines.push({prId:pr.id, itemIdx:idx, itemNo:it.itemNo, itemType:it.itemType, description:it.description, qty:it.qty, uom:it.uom, unitPrice:it.unitPrice});
   po.audit.push(logEntry(`Line added: ${itemLabel(it)} (${pr.prNumber})`));
   it.docId=po.id; it.docType='PO'; it.stage=po.status; // mirrors the PO's current status (DRAFT)
+  savePOToSupabase(po);
 }
 function createAEFForItem(pr, it, idx){
   const aef = makeAEF({
@@ -3480,6 +3491,131 @@ function createAEFForItem(pr, it, idx){
   aef.audit.push(logEntry('Advance to Employees Form drafted'));
   AEFS.push(aef);
   it.docId=aef.id; it.docType='AEF'; it.stage=aef.status; // mirror DRAFT
+  saveAEFToSupabase(aef);
+}
+
+/* ============================================================
+   SUPABASE SYNC — POs and AEFs
+   ============================================================
+   Same pattern as PRs above: getPO()/getAEF() are called by virtually every
+   function that reads or mutates a document, so they're the choke-point
+   used to mark a doc "dirty" for a debounced background save. */
+let dirtyPOIds = new Set(), dirtyAEFIds = new Set();
+let poSyncTimer = null, aefSyncTimer = null;
+function markPODirty(id){
+  if(!id || !sb) return;
+  dirtyPOIds.add(id);
+  if(poSyncTimer) clearTimeout(poSyncTimer);
+  poSyncTimer = setTimeout(flushDirtyPOs, 800);
+}
+function markAEFDirty(id){
+  if(!id || !sb) return;
+  dirtyAEFIds.add(id);
+  if(aefSyncTimer) clearTimeout(aefSyncTimer);
+  aefSyncTimer = setTimeout(flushDirtyAEFs, 800);
+}
+async function flushDirtyPOs(){
+  const ids = Array.from(dirtyPOIds); dirtyPOIds.clear();
+  for(const id of ids){ const po = getPO(id); if(po) await savePOToSupabase(po); }
+}
+async function flushDirtyAEFs(){
+  const ids = Array.from(dirtyAEFIds); dirtyAEFIds.clear();
+  for(const id of ids){ const aef = getAEF(id); if(aef) await saveAEFToSupabase(aef); }
+}
+function poLineRowId(poId, idx){ return poId + '#' + idx; }
+function poToRow(po){
+  return { id: po.id, po_number: po.poNumber, po_date: po.poDate, vendor_name: po.vendorName,
+    vendor_contact: po.vendorContact, vendor_address: po.vendorAddress, ship_to: po.shipTo,
+    tax_rate: po.taxRate, tax_type: po.taxType, message: po.message, note: po.note,
+    checked_by: po.checkedBy, email_composed: po.emailComposed, submitted_for_approval_date: po.submittedForApprovalDate,
+    status: po.status, dir_approved_doc: po.dirApprovedDoc, vp_approved_doc: po.vpApprovedDoc,
+    dir_approver_name: po.dirApproverName, dir_signature: po.dirSignature, dir_approved_date: po.dirApprovedDate,
+    vp_approver_name: po.vpApproverName, vp_signature: po.vpSignature, vp_approved_date: po.vpApprovedDate,
+    audit: po.audit||[] };
+}
+function poLineToRow(po, l, idx){
+  return { id: poLineRowId(po.id, idx), po_id: po.id, pr_item_id: (l.prId!=null && l.itemIdx!=null) ? (l.prId+'#'+l.itemIdx) : null,
+    item_no: l.itemNo, item_type: l.itemType, description: l.description, qty: l.qty, uom: l.uom, unit_price: l.unitPrice };
+}
+function rowToPOLine(row){
+  return { prId: row.pr_item_id ? row.pr_item_id.split('#')[0] : null, itemIdx: row.pr_item_id ? Number(row.pr_item_id.split('#')[1]) : null,
+    itemNo: row.item_no, itemType: row.item_type, description: row.description, qty: row.qty, uom: row.uom, unitPrice: row.unit_price };
+}
+function rowToPO(row, lineRows){
+  lineRows = lineRows.slice().sort((a,b)=>{
+    const ai = Number(String(a.id).split('#')[1]||0), bi = Number(String(b.id).split('#')[1]||0);
+    return ai-bi;
+  });
+  return makePO({ id: row.id, poNumber: row.po_number, poDate: row.po_date, vendorName: row.vendor_name,
+    vendorContact: row.vendor_contact, vendorAddress: row.vendor_address, shipTo: row.ship_to,
+    taxRate: row.tax_rate, taxType: row.tax_type, message: row.message||'', note: row.note||'',
+    checkedBy: row.checked_by, emailComposed: row.email_composed, submittedForApprovalDate: row.submitted_for_approval_date,
+    status: row.status, dirApprovedDoc: row.dir_approved_doc, vpApprovedDoc: row.vp_approved_doc,
+    dirApproverName: row.dir_approver_name, dirSignature: row.dir_signature, dirApprovedDate: row.dir_approved_date,
+    vpApproverName: row.vp_approver_name, vpSignature: row.vp_signature, vpApprovedDate: row.vp_approved_date,
+    audit: row.audit||[], lines: lineRows.map(rowToPOLine) });
+}
+function aefToRow(aef){
+  return { id: aef.id, aef_number: aef.aefNumber, date: aef.date, date_needed: aef.dateNeeded,
+    employee_name: aef.employeeName, department: aef.department, purpose: aef.purpose, particulars: aef.particulars,
+    amount: aef.amount, remarks: aef.remarks, signature: aef.signature, checked_by: aef.checkedBy,
+    submitted_for_approval_date: aef.submittedForApprovalDate, status: aef.status,
+    dir_approved_doc: aef.dirApprovedDoc, vp_approved_doc: aef.vpApprovedDoc,
+    dir_approver_name: aef.dirApproverName, dir_signature: aef.dirSignature, dir_approved_date: aef.dirApprovedDate,
+    vp_approver_name: aef.vpApproverName, vp_signature: aef.vpSignature, vp_approved_date: aef.vpApprovedDate,
+    released_amount: aef.releasedAmount, released_by: aef.releasedBy, release_date: aef.releaseDate, release_reference: aef.releaseReference,
+    pr_item_id: (aef.prId!=null && aef.itemIdx!=null) ? (aef.prId+'#'+aef.itemIdx) : null, audit: aef.audit||[] };
+}
+function rowToAEF(row){
+  return makeAEF({ id: row.id, aefNumber: row.aef_number, date: row.date, dateNeeded: row.date_needed,
+    employeeName: row.employee_name, department: row.department, purpose: row.purpose, particulars: row.particulars,
+    amount: row.amount, remarks: row.remarks, signature: row.signature, checkedBy: row.checked_by,
+    submittedForApprovalDate: row.submitted_for_approval_date, status: row.status,
+    dirApprovedDoc: row.dir_approved_doc, vpApprovedDoc: row.vp_approved_doc,
+    dirApproverName: row.dir_approver_name, dirSignature: row.dir_signature, dirApprovedDate: row.dir_approved_date,
+    vpApproverName: row.vp_approver_name, vpSignature: row.vp_signature, vpApprovedDate: row.vp_approved_date,
+    releasedAmount: row.released_amount, releasedBy: row.released_by, releaseDate: row.release_date, releaseReference: row.release_reference||'',
+    prId: row.pr_item_id ? row.pr_item_id.split('#')[0] : null, itemIdx: row.pr_item_id ? Number(row.pr_item_id.split('#')[1]) : null,
+    audit: row.audit||[] });
+}
+async function savePOToSupabase(po){
+  if(!sb) return;
+  try{
+    const { error: e1 } = await sb.from('purchase_orders').upsert(poToRow(po));
+    if(e1) throw e1;
+    const lineRows = po.lines.map((l,idx)=>poLineToRow(po, l, idx));
+    if(lineRows.length){
+      const { error: e2 } = await sb.from('po_lines').upsert(lineRows);
+      if(e2) throw e2;
+    }
+  }catch(e){ console.error('savePOToSupabase failed', e); showToast('Could not save PO to the database: '+(e.message||JSON.stringify(e))); }
+}
+async function saveAEFToSupabase(aef){
+  if(!sb) return;
+  try{
+    const { error } = await sb.from('aefs').upsert(aefToRow(aef));
+    if(error) throw error;
+  }catch(e){ console.error('saveAEFToSupabase failed', e); showToast('Could not save AEF to the database: '+(e.message||JSON.stringify(e))); }
+}
+async function loadAllPOsFromSupabase(){
+  if(!sb) return;
+  try{
+    const [{ data: poRows, error: e1 }, { data: lineRows, error: e2 }] = await Promise.all([
+      sb.from('purchase_orders').select('*'), sb.from('po_lines').select('*'),
+    ]);
+    if(e1) throw e1; if(e2) throw e2;
+    const linesByPO = {};
+    (lineRows||[]).forEach(row=>{ (linesByPO[row.po_id] = linesByPO[row.po_id]||[]).push(row); });
+    POS = (poRows||[]).map(row=>rowToPO(row, linesByPO[row.id]||[]));
+  }catch(e){ console.error('loadAllPOsFromSupabase failed', e); showToast('Could not load POs from the database: '+(e.message||JSON.stringify(e))); }
+}
+async function loadAllAEFsFromSupabase(){
+  if(!sb) return;
+  try{
+    const { data, error } = await sb.from('aefs').select('*');
+    if(error) throw error;
+    AEFS = (data||[]).map(rowToAEF);
+  }catch(e){ console.error('loadAllAEFsFromSupabase failed', e); showToast('Could not load AEFs from the database: '+(e.message||JSON.stringify(e))); }
 }
 
 /* ============================================================
@@ -4184,8 +4320,8 @@ async function restoreSessionOnLoad(){
   showSessionLoadingBar(true);
   currentUser = saved;
   try{
-    await loadAllPRsFromSupabase();
-  }catch(e){ /* loadAllPRsFromSupabase already surfaces its own error toast */ }
+    await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase()]);
+  }catch(e){ /* the load functions already surface their own error toasts */ }
   showSessionLoadingBar(false);
   enterApp();
 }
