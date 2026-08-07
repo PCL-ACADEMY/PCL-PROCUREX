@@ -1998,17 +1998,52 @@ function viewNewRequest(){
       <div class="field"><label>Date needed</label><input id="nrDate" type="date" value="${esc(nrDraft.dateNeeded)}" oninput="nrDraft.dateNeeded=this.value"></div>
       ${itemRowsHtml(nrDraft,'nr')}
       <div class="field"><label>Purpose of request</label><textarea id="nrPurpose" rows="3" placeholder="Why this is needed…" oninput="nrDraft.purpose=this.value">${esc(nrDraft.purpose)}</textarea></div>
-      <button class="btn btn-primary" onclick="submitNewRequest()">Submit request</button>
+      <button class="btn btn-primary" onclick="confirmSubmitNewRequest()">Submit request</button>
     </div>
   </div>`;
 }
-function submitNewRequest(){
+function requestSummaryHtml(items, extraRows){
+  return `
+    ${extraRows||''}
+    <div class="section-lbl">Review before submitting</div>
+    <div class="tbl-wrap-x" style="margin-bottom:8px;">
+      <table>
+        <thead><tr><th>Category</th><th>Item</th><th>Item Description</th><th>Qty</th><th>UOM</th></tr></thead>
+        <tbody>
+          ${items.map(it=>`<tr>
+            <td>${esc(it.category)}</td>
+            <td>${esc(it.itemType)}</td>
+            <td>${esc(it.description)||'—'}</td>
+            <td>${esc(it.qty)}</td>
+            <td>${esc(it.uom)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="help">Please review the details above — once submitted, this goes to procurement for processing.</p>`;
+}
+function confirmSubmitNewRequest(){
   ensureNrDraft();
   const requisitionerName = nrDraft.requisitionerName.trim();
   if(!requisitionerName){ showToast('Enter the requisitioner\'s name before submitting.'); return; }
   const touched = nrDraft.items.filter(it=>it.category.trim()||it.itemType.trim()||it.description.trim());
   if(!touched.length){ showToast('Add at least one item before submitting.'); return; }
   if(touched.some(it=>!it.itemType.trim())){ showToast('Select a category and item for every row before submitting.'); return; }
+  const extraRows = `
+    <div class="kv" style="background:var(--panel);border:1px solid var(--border-soft);border-radius:3px;padding:12px 14px;margin-bottom:14px;">
+      <div><div class="k">Requisitioner</div><div class="v">${esc(requisitionerName)}</div></div>
+      <div><div class="k">Site</div><div class="v">${esc(siteLabel(currentUser.site))}</div></div>
+      <div><div class="k">Date needed</div><div class="v">${esc(nrDraft.dateNeeded)||'—'}</div></div>
+      <div><div class="k">Purpose</div><div class="v">${esc(nrDraft.purpose)||'—'}</div></div>
+    </div>`;
+  formModal('Confirm request', requestSummaryHtml(touched, extraRows), ()=>{
+    doSubmitNewRequest();
+  }, 'Confirm & submit');
+}
+function doSubmitNewRequest(){
+  ensureNrDraft();
+  const requisitionerName = nrDraft.requisitionerName.trim();
+  const touched = nrDraft.items.filter(it=>it.category.trim()||it.itemType.trim()||it.description.trim());
   const items = touched.map((it,i)=>({...it, itemNo:i+1}));
   const pr = makePR({
     items, purpose: nrDraft.purpose, site: currentUser.site, notedBy: currentUser.name,
@@ -2051,17 +2086,32 @@ function viewNewRequestProc(){
       <div class="field"><label>Date needed</label><input id="npDate" type="date" value="${esc(npDraft.dateNeeded)}" oninput="npDraft.dateNeeded=this.value"></div>
       ${itemRowsHtml(npDraft,'np')}
       <div class="field"><label>Purpose of request</label><textarea id="npPurpose" rows="3" placeholder="Why this is needed…" oninput="npDraft.purpose=this.value">${esc(npDraft.purpose)}</textarea></div>
-      <button class="btn btn-primary" onclick="submitNewRequestProc()">Submit request</button>
+      <button class="btn btn-primary" onclick="confirmSubmitNewRequestProc()">Submit request</button>
     </div>
   </div>`;
 }
-function submitNewRequestProc(){
+function confirmSubmitNewRequestProc(){
   ensureNpDraft();
   const requestorName = npDraft.requestorName.trim();
   if(!requestorName){ showToast('Enter the requestor\'s name before submitting.'); return; }
   const touched = npDraft.items.filter(it=>it.category.trim()||it.itemType.trim()||it.description.trim());
   if(!touched.length){ showToast('Add at least one item before submitting.'); return; }
   if(touched.some(it=>!it.itemType.trim())){ showToast('Select a category and item for every row before submitting.'); return; }
+  const extraRows = `
+    <div class="kv" style="background:var(--panel);border:1px solid var(--border-soft);border-radius:3px;padding:12px 14px;margin-bottom:14px;">
+      <div><div class="k">Requisitioner</div><div class="v">${esc(requestorName)}</div></div>
+      <div><div class="k">Site</div><div class="v">${esc(siteLabel(npDraft.site))}</div></div>
+      <div><div class="k">Date needed</div><div class="v">${esc(npDraft.dateNeeded)||'—'}</div></div>
+      <div><div class="k">Purpose</div><div class="v">${esc(npDraft.purpose)||'—'}</div></div>
+    </div>`;
+  formModal('Confirm request', requestSummaryHtml(touched, extraRows), ()=>{
+    doSubmitNewRequestProc();
+  }, 'Confirm & submit');
+}
+function doSubmitNewRequestProc(){
+  ensureNpDraft();
+  const requestorName = npDraft.requestorName.trim();
+  const touched = npDraft.items.filter(it=>it.category.trim()||it.itemType.trim()||it.description.trim());
   const items = touched.map((it,i)=>({...it, itemNo:i+1}));
   const pr = makePR({
     items, purpose: npDraft.purpose, site: npDraft.site, notedBy: siteHead(npDraft.site),
