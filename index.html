@@ -307,7 +307,7 @@ const DIRECT_REASONS = ["Repeat Purchase","Lowest Existing Contract Price","Sole
 /* Sites / departments a requestor account belongs to. "head" is who a request
    is automatically routed to for department-head sign-off — fill in real names
    here; placeholders are marked TBD. */
-const SITES = [
+let SITES = [
   {id:'taylor',     label:'Taylor Site',            head:'Allan Tagulao'},
   {id:'meta',       label:'Meta Site',              head:'Glades Villa'},
   {id:'bwpc',       label:'BWPC Site',              head:'Era Ercilla'},
@@ -336,7 +336,7 @@ const ROLES = [
 ];
 function roleLabel(k){ return (ROLES.find(r=>r.key===k)||{}).title || k; }
 
-const ACCOUNTS = [
+let ACCOUNTS = [
   {email:'allantagulao@procurex.com.ph',     password:'PCLATtaylor',      name:'Allan Tagulao',       role:'requestor', site:'taylor'},
   {email:'gladesvilla@procurex.com.ph',      password:'PCLGVmeta',        name:'Glades Villa',        role:'requestor', site:'meta'},
   {email:'eraercilla@procurex.com.ph',       password:'PCLEEbwpc',        name:'Era Ercilla',         role:'requestor', site:'bwpc'},
@@ -1176,7 +1176,7 @@ async function flushDirtyVendors(){
   for(const id of ids){ const v = VENDORS.find(x=>x.id===id); if(v) await saveVendorToSupabase(v); }
 }
 function vendorToRow(v){
-  return { id: v.id, name: v.name, contact_person: v.contactPerson, contact: v.contact, address: v.address,
+  return { id: v.id, name: v.name, vendor_number: v.vendorNumber, contact_person: v.contactPerson, contact: v.contact, address: v.address,
     payment_terms: v.paymentTerms, accreditation_status: v.accreditationStatus, accreditation_no: v.accreditationNo };
 }
 function vendorItemToRow(vendorId, it){
@@ -1186,7 +1186,7 @@ function rowToVendorItem(row){
   return makeVendorItem({ id: row.id, name: row.name, price: row.price, warranty: row.warranty||'' });
 }
 function rowToVendor(row, itemRows){
-  return makeVendor({ id: row.id, name: row.name, contactPerson: row.contact_person||'', contact: row.contact||'',
+  return makeVendor({ id: row.id, vendorNumber: row.vendor_number, name: row.name, contactPerson: row.contact_person||'', contact: row.contact||'',
     address: row.address||'', paymentTerms: row.payment_terms||'', accreditationStatus: row.accreditation_status||'Pending',
     accreditationNo: row.accreditation_no||'', items: itemRows.map(rowToVendorItem) });
 }
@@ -1217,18 +1217,56 @@ async function deleteVendorFromSupabase(vendorId){
     if(error) throw error;
   }catch(e){ console.error('deleteVendorFromSupabase failed', e); showToast('Could not remove vendor from the database: '+(e.message||JSON.stringify(e))); }
 }
+// Login itself already goes through Supabase (the check_login RPC), so this isn't needed for
+// signing in — it's for everything else that reads ACCOUNTS: signature lookups, who to CC on a
+// PO email, role display names. Without this, a new hire or an edited name/signature would only
+// show up after editing this file directly. Only pulls the columns the app actually needs —
+// never password_hash, which should never leave the database.
+async function loadAllAccountsFromSupabase(){
+  if(!sb) return;
+  try{
+    const { data, error } = await sb.from('accounts').select('email, name, role, site, signature');
+    if(error) throw error;
+    if(!data || !data.length) return; // nothing there yet — keep the built-in defaults
+    ACCOUNTS = data.map(row=>({ email: row.email, name: row.name, role: row.role, site: row.site, signature: row.signature||null }));
+  }catch(e){ console.error('loadAllAccountsFromSupabase failed', e); showToast('Could not load accounts from the database: '+(e.message||JSON.stringify(e))); }
+}
+async function loadAllSitesFromSupabase(){
+  if(!sb) return;
+  try{
+    const { data, error } = await sb.from('sites').select('*');
+    if(error) throw error;
+    if(!data || !data.length) return; // nothing there yet — keep the built-in defaults
+    SITES = data.map(row=>({ id: row.id, label: row.label, head: row.head }));
+  }catch(e){ console.error('loadAllSitesFromSupabase failed', e); showToast('Could not load sites from the database: '+(e.message||JSON.stringify(e))); }
+}
 async function loadAllVendorsFromSupabase(){
   if(!sb) return;
   try{
     const [{ data: vRows, error: e1 }, { data: itemRows, error: e2 }] = await Promise.all([
-      sb.from('vendors').select('*'), sb.from('vendor_items').select('*'),
+      sb.from('vendors').select('*').order('created_at'), sb.from('vendor_items').select('*'),
     ]);
     if(e1) throw e1; if(e2) throw e2;
     if(!vRows || !vRows.length) return; // nothing synced yet — keep whatever's in memory (empty by default)
     const itemsByVendor = {};
     (itemRows||[]).forEach(row=>{ (itemsByVendor[row.vendor_id] = itemsByVendor[row.vendor_id]||[]).push(row); });
     VENDORS = vRows.map(row=>rowToVendor(row, itemsByVendor[row.id]||[]));
+    await renumberVendors();
   }catch(e){ console.error('loadAllVendorsFromSupabase failed', e); showToast('Could not load vendors from the database: '+(e.message||JSON.stringify(e))); }
+}
+// Vendor numbers (VEN-0001, VEN-0002…) are just an internal reference, never sent to anyone
+// outside the company, so it's safe to close gaps left by a deleted vendor. Re-numbers everyone
+// in creation order and pushes any changed numbers back to Supabase.
+async function renumberVendors(){
+  let changed = false;
+  VENDORS.forEach((v,i)=>{
+    const wanted = 'VEN-'+String(i+1).padStart(4,'0');
+    if(v.vendorNumber !== wanted){ v.vendorNumber = wanted; changed = true; }
+  });
+  vendorSeq = VENDORS.length;
+  if(changed && sb){
+    for(const v of VENDORS) await saveVendorToSupabase(v);
+  }
 }
 function seedVendors(){
   VENDORS = [
@@ -1352,9 +1390,9 @@ let ui = { procTab:'New Requests', procSection:'pipeline', apprWindow:'req', apT
   expandedVendors:{}, expandedPRs:{}, expandedCategories:{} };
 
 const SESSION_KEY = 'pclProcurexSession';
-function saveSession(user){ try{ localStorage.setItem(SESSION_KEY, JSON.stringify(user)); }catch(e){} }
-function clearSession(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} }
-function loadSavedSession(){ try{ const raw = localStorage.getItem(SESSION_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
+function saveSession(user){ try{ sessionStorage.setItem(SESSION_KEY, JSON.stringify(user)); }catch(e){} }
+function clearSession(){ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} }
+function loadSavedSession(){ try{ const raw = sessionStorage.getItem(SESSION_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
 function showSessionLoadingBar(show){
   const el = document.getElementById('session-loading-bar');
   el.style.display = show ? 'flex' : 'none';
@@ -1398,13 +1436,13 @@ async function doLogin(){
   }
   currentUser = { name: match.name, role: match.role, email: match.email, site: match.site, signature: match.signature||null };
   saveSession(currentUser);
-  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase()]);
+  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase()]);
   enterApp();
 }
 function doLogout(){
   currentUser = null; ui.openItem=null; ui.openDoc=null;
   clearSession();
-  try{ localStorage.removeItem(NAV_KEY); }catch(e){}
+  try{ sessionStorage.removeItem(NAV_KEY); }catch(e){}
   document.getElementById('app-screen').style.display='none';
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('loginEmail').value='';
@@ -1501,13 +1539,27 @@ async function loadAllPRsFromSupabase(){
   if(!sb) return;
   try{
     const [{ data: prRows, error: e1 }, { data: itemRows, error: e2 }] = await Promise.all([
-      sb.from('purchase_requests').select('*'), sb.from('pr_items').select('*'),
+      sb.from('purchase_requests').select('*').order('created_at'), sb.from('pr_items').select('*'),
     ]);
     if(e1) throw e1; if(e2) throw e2;
     const itemsByPR = {};
     (itemRows||[]).forEach(row=>{ (itemsByPR[row.pr_id] = itemsByPR[row.pr_id]||[]).push(row); });
     PRS = (prRows||[]).map(row=>rowToPR(row, itemsByPR[row.id]||[]));
+    await renumberPRs();
   }catch(e){ console.error('loadAllPRsFromSupabase failed', e); showToast('Could not load requests from the database: '+(e.message||e)); }
+}
+// Closes gaps left when a PR is deleted (e.g. directly in Supabase), so numbers stay
+// contiguous. Re-numbers in creation order and pushes changes back to Supabase.
+async function renumberPRs(){
+  let changed = false;
+  PRS.forEach((pr,i)=>{
+    const wanted = 'PR-2026-'+String(i+1).padStart(4,'0');
+    if(pr.prNumber !== wanted){ pr.prNumber = wanted; changed = true; }
+  });
+  prSeq = PRS.length;
+  if(changed && sb){
+    for(const pr of PRS) await savePRToSupabase(pr);
+  }
 }
 // Poll for changes made by other people. Skipped while a drawer/modal is open so
 // it doesn't yank the screen out from under someone mid-edit.
@@ -1515,7 +1567,7 @@ setInterval(async ()=>{
   if(!sb || !currentUser) return;
   if(ui.openItem || ui.openDoc) return;
   if(dirtyPRIds.size || dirtyPOIds.size || dirtyAEFIds.size || dirtyVendorIds.size) return; // don't clobber a save that's about to go out
-  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase()]);
+  await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase()]);
   renderSidebar(); renderContent();
 }, 20000);
 
@@ -1837,14 +1889,14 @@ function navGroup(label, items, activeKey, fnName){
 }
 const NAV_KEY = 'pclProcurexNav';
 function saveNavState(){
-  try{ localStorage.setItem(NAV_KEY, JSON.stringify({
+  try{ sessionStorage.setItem(NAV_KEY, JSON.stringify({
     procTab: ui.procTab, procSection: ui.procSection, apprWindow: ui.apprWindow,
     apTab: ui.apTab, reqTab: ui.reqTab, approvedTab: ui.approvedTab,
   })); }catch(e){}
 }
 function restoreNavState(){
   try{
-    const raw = localStorage.getItem(NAV_KEY);
+    const raw = sessionStorage.getItem(NAV_KEY);
     if(raw) Object.assign(ui, JSON.parse(raw));
   }catch(e){}
 }
@@ -2371,8 +2423,8 @@ function exportApprovedRequestsCSV(){
 function exportApprovedPOCSV(){
   const all = applyPOFilter(POS.filter(p=>p.dirApprovedDoc && p.vpApprovedDoc));
   const headers = ['PO Number','PR Number','Vendor','Vendor Contact','Vendor Address','Payment Terms','Ship To','PO Date',
-    'Line No','Item Description','Item Type','Qty','UOM','Unit Price','Line Total',
-    'PO Subtotal','Tax Type','Tax','PO Grand Total','Status','Director Approver','VP Approver'];
+    'Line No','Item Description','Item Type','Qty','UOM','Unit Price','Line Total','Line VAT',
+    'PO Subtotal','Tax Type','PO Total VAT','PO Grand Total','Status','Director Approver','VP Approver'];
   const rows = [];
   all.forEach(po=>{
     const t = poTotal(po);
@@ -2380,8 +2432,9 @@ function exportApprovedPOCSV(){
     const taxTypeLabel = 'VAT';
     (po.lines.length?po.lines:[{}]).forEach((l,i)=>{
       const srcPR = l.prId ? getPR(l.prId) : null;
+      const lineTotal = (l.unitPrice||0)*(l.qty||0);
       rows.push([po.poNumber, srcPR?srcPR.prNumber:'', po.vendorName, po.vendorContact, po.vendorAddress, vendorRec?vendorRec.paymentTerms:'', po.shipTo, po.poDate,
-        i+1, l.description||'', l.itemType||'', l.qty||'', l.uom||'', l.unitPrice||'', (l.unitPrice||0)*(l.qty||0),
+        i+1, l.description||'', l.itemType||'', l.qty||'', l.uom||'', l.unitPrice||'', lineTotal, lineTotal*(po.taxRate||0),
         t.subtotal, taxTypeLabel, t.tax, t.total, docStatusText(po.status), po.dirApproverName, po.vpApproverName]);
     });
   });
@@ -3179,8 +3232,54 @@ function emptyState(title,sub){
 /* ============================================================
    DRAWER — item detail
    ============================================================ */
-function openItem(prId, idx){ ui.openItem={prId,idx}; ui.openDoc=null; renderDrawer(); document.getElementById('overlay').classList.add('show'); }
-function openDoc(type, id){ ui.openDoc={type,id}; ui.openItem=null; renderDrawer(); document.getElementById('overlay').classList.add('show'); }
+// Pulls just this one PR fresh from Supabase before it's opened, so Director/VP (or either
+// procurement officer) never act on a copy that's up to 20 seconds stale — closing the real
+// window where two people's saves could collide.
+async function refreshSinglePR(prId){
+  if(!sb) return;
+  try{
+    const [{ data: prRow, error: e1 }, { data: itemRows, error: e2 }] = await Promise.all([
+      sb.from('purchase_requests').select('*').eq('id', prId).single(),
+      sb.from('pr_items').select('*').eq('pr_id', prId),
+    ]);
+    if(e1 || !prRow || e2) return; // not found, or a transient error — keep showing the local copy
+    const freshPR = rowToPR(prRow, itemRows||[]);
+    const i = PRS.findIndex(p=>p.id===prId);
+    if(i>=0) PRS[i] = freshPR; else PRS.unshift(freshPR);
+  }catch(e){ console.error('refreshSinglePR failed', e); }
+}
+async function refreshSinglePO(poId){
+  if(!sb) return;
+  try{
+    const [{ data: poRow, error: e1 }, { data: lineRows, error: e2 }] = await Promise.all([
+      sb.from('purchase_orders').select('*').eq('id', poId).single(),
+      sb.from('po_lines').select('*').eq('po_id', poId),
+    ]);
+    if(e1 || !poRow || e2) return;
+    const freshPO = rowToPO(poRow, lineRows||[]);
+    const i = POS.findIndex(p=>p.id===poId);
+    if(i>=0) POS[i] = freshPO; else POS.unshift(freshPO);
+  }catch(e){ console.error('refreshSinglePO failed', e); }
+}
+async function refreshSingleAEF(aefId){
+  if(!sb) return;
+  try{
+    const { data: row, error } = await sb.from('aefs').select('*').eq('id', aefId).single();
+    if(error || !row) return;
+    const freshAEF = rowToAEF(row);
+    const i = AEFS.findIndex(a=>a.id===aefId);
+    if(i>=0) AEFS[i] = freshAEF; else AEFS.unshift(freshAEF);
+  }catch(e){ console.error('refreshSingleAEF failed', e); }
+}
+function openItem(prId, idx){
+  ui.openItem={prId,idx}; ui.openDoc=null; renderDrawer(); document.getElementById('overlay').classList.add('show');
+  refreshSinglePR(prId).then(()=>{ if(ui.openItem && ui.openItem.prId===prId && ui.openItem.idx===idx) renderDrawer(); });
+}
+function openDoc(type, id){
+  ui.openDoc={type,id}; ui.openItem=null; renderDrawer(); document.getElementById('overlay').classList.add('show');
+  const refresh = type==='PO' ? refreshSinglePO : refreshSingleAEF;
+  refresh(id).then(()=>{ if(ui.openDoc && ui.openDoc.type===type && ui.openDoc.id===id) renderDrawer(); });
+}
 function closeDrawer(){ document.getElementById('overlay').classList.remove('show'); ui.openItem=null; ui.openDoc=null; }
 
 function renderDrawer(){
@@ -3213,14 +3312,17 @@ function renderItemDrawer(){
       </div>
       <div class="tbl-wrap" style="margin:12px 0;">
         <table>
-          <thead><tr><th>Category</th><th>Item Type</th><th>Qty</th><th>UOM</th>${currentUser.role==='requestor'?'':'<th>Unit Price</th><th>Total Price</th>'}</tr></thead>
+          <thead><tr><th>Category</th><th>Item Type</th><th>Item Description</th><th>Qty</th><th>UOM</th>${currentUser.role==='requestor'?'':'<th>Unit Price</th><th>Total Price</th>'}</tr></thead>
           <tbody><tr>
             <td>${esc(it.category)||'—'}</td>
             <td>${esc(it.itemType)||'—'}</td>
-            <td>${(currentUser.role==='director' && !it.dirApprovedReq) || (currentUser.role==='vp' && !it.vpApprovedReq) ?
+            <td>${esc(it.description)||'—'}</td>
+            <td>${(currentUser.role==='director' && !it.dirApprovedReq) || (currentUser.role==='vp' && !it.vpApprovedReq) || (currentUser.role==='procurement' && it.stage==='UNDER_REVIEW') ?
               `<input type="number" min="1" value="${it.qty}" style="width:70px;" onchange="updateItemQtyInline('${pr.id}',${idx},this.value)">` :
               it.qty}</td>
-            <td>${esc(it.uom)||'—'}</td>
+            <td>${currentUser.role==='procurement' && it.stage==='UNDER_REVIEW' ?
+              `<input value="${esc(it.uom)}" style="width:70px;" onchange="updateItemUomInline('${pr.id}',${idx},this.value)">` :
+              esc(it.uom)||'—'}</td>
             ${currentUser.role==='requestor' ? '' : `<td>${money(it.unitPrice)}</td><td>${money(itemTotal(it))}</td>`}
           </tr></tbody>
         </table>
@@ -3412,7 +3514,10 @@ function showAddQuoteForm(prId, idx){
         it.canvassVendors.push(quoteData);
         it.audit.push(logEntry(`Vendor quote added: ${vendorName} — ${itemName} (${money(price)}/unit)`));
       }
-      renderAll();
+      showToast(`Quote added — ${vendorName} (${money(price)}/unit). Add another, or close when done.`);
+      renderSidebar(); renderContent(); // refresh counts/badges behind the modal, without touching the drawer
+      showAddQuoteForm(prId, idx); // reopen fresh so another quote can be entered without reopening the item
+      return false; // stops formModal's default close — the reopen above already replaced the drawer content
     }, 'Add quote');
 }
 function removeVendorQuote(prId, idx, quoteIdx){
@@ -3694,6 +3799,16 @@ function updateItemQtyInline(prId, idx, value){
   }
   renderContent();
 }
+function updateItemUomInline(prId, idx, value){
+  const {it} = findItem(prId,idx);
+  const uom = value.trim();
+  if(!uom){ showToast('Enter a valid unit of measure.'); renderContent(); return; }
+  if(uom!==it.uom){
+    it.audit.push(logEntry(`UOM adjusted by ${currentUser.name} (${roleLabel(currentUser.role)}): ${it.uom} → ${uom}`));
+    it.uom = uom;
+  }
+  renderContent();
+}
 function showApproveItemForm(prId, idx){
   const {pr,it} = findItem(prId,idx);
   formModal('Approve item', `
@@ -3880,21 +3995,47 @@ async function loadAllPOsFromSupabase(){
   if(!sb) return;
   try{
     const [{ data: poRows, error: e1 }, { data: lineRows, error: e2 }] = await Promise.all([
-      sb.from('purchase_orders').select('*'), sb.from('po_lines').select('*'),
+      sb.from('purchase_orders').select('*').order('created_at'), sb.from('po_lines').select('*'),
     ]);
     if(e1) throw e1; if(e2) throw e2;
     const linesByPO = {};
     (lineRows||[]).forEach(row=>{ (linesByPO[row.po_id] = linesByPO[row.po_id]||[]).push(row); });
     POS = (poRows||[]).map(row=>rowToPO(row, linesByPO[row.id]||[]));
+    await renumberPOs();
   }catch(e){ console.error('loadAllPOsFromSupabase failed', e); showToast('Could not load POs from the database: '+(e.message||JSON.stringify(e))); }
+}
+// Closes gaps left when a PO is deleted, same idea as renumberPRs().
+async function renumberPOs(){
+  let changed = false;
+  POS.forEach((po,i)=>{
+    const wanted = '2026-'+String(i+1).padStart(4,'0');
+    if(po.poNumber !== wanted){ po.poNumber = wanted; changed = true; }
+  });
+  poSeq = POS.length;
+  if(changed && sb){
+    for(const po of POS) await savePOToSupabase(po);
+  }
 }
 async function loadAllAEFsFromSupabase(){
   if(!sb) return;
   try{
-    const { data, error } = await sb.from('aefs').select('*');
+    const { data, error } = await sb.from('aefs').select('*').order('created_at');
     if(error) throw error;
     AEFS = (data||[]).map(rowToAEF);
+    await renumberAEFs();
   }catch(e){ console.error('loadAllAEFsFromSupabase failed', e); showToast('Could not load AEFs from the database: '+(e.message||JSON.stringify(e))); }
+}
+// Closes gaps left when an AEF is deleted, same idea as renumberPRs().
+async function renumberAEFs(){
+  let changed = false;
+  AEFS.forEach((aef,i)=>{
+    const wanted = 'AEF-2026-'+String(i+1).padStart(4,'0');
+    if(aef.aefNumber !== wanted){ aef.aefNumber = wanted; changed = true; }
+  });
+  aefSeq = AEFS.length;
+  if(changed && sb){
+    for(const aef of AEFS) await saveAEFToSupabase(aef);
+  }
 }
 
 /* ============================================================
@@ -4601,7 +4742,7 @@ async function restoreSessionOnLoad(){
   restoreNavState();
   const minDelay = new Promise(resolve=>setTimeout(resolve, 2000));
   try{
-    await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), minDelay]);
+    await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase(), minDelay]);
   }catch(e){ /* the load functions already surface their own error toasts */ }
   showSessionLoadingBar(false);
   enterApp();
