@@ -2156,16 +2156,22 @@ function viewMyRequests(){
   ${all.length>0 ? searchInput('myReqSearch', ui.search.myReq, 'Search PR / PO / AEF number, item, vendor…', 'setMyReqQuery') : ''}
   ${all.length===0 ? emptyState(bucketMeta.empty, allSite.length===0?'Submit your first purchase request to see it tracked here.':'Check the other tabs under My Requests.') :
     filteredGroups.length===0 ? emptyState('No matches','No items match your search.') :
-    filteredGroups.map(g=>`
-    <div class="form-card" style="margin-bottom:14px;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-        <div>
-          <div class="pr-code" style="font-size:14px;">${g.pr.prNumber}</div>
-          <div style="font-size:12px;color:var(--text-faint);margin-top:2px;">${esc(g.pr.requestorName)} · Requested ${esc(g.pr.dateSubmitted)}${g.pr.requiredDate?` · Needed ${esc(g.pr.requiredDate)}`:''}</div>
+    filteredGroups.map(g=>{
+      const open = !!ui.expandedPRs[g.pr.id];
+      return `
+    <div class="form-card" style="margin-bottom:14px;cursor:pointer;" onclick="togglePRExpand('${g.pr.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <span style="color:var(--text-faint);">${open?'▾':'▸'}</span>
+          <div>
+            <div class="pr-code" style="font-size:14px;">${g.pr.prNumber}</div>
+            <div style="font-size:12px;color:var(--text-faint);margin-top:2px;">${esc(g.pr.requestorName)} · Requested ${esc(g.pr.dateSubmitted)}${g.pr.requiredDate?` · Needed ${esc(g.pr.requiredDate)}`:''} · ${g.rows.length} item${g.rows.length===1?'':'s'}</div>
+          </div>
         </div>
         ${g.pr.purpose?`<div style="font-size:12px;color:var(--text-dim);max-width:320px;text-align:right;">${esc(g.pr.purpose)}</div>`:''}
       </div>
-      <div class="tbl-wrap">
+      ${open ? `
+      <div class="tbl-wrap" style="margin-top:10px;" onclick="event.stopPropagation();">
         <table>
           <thead><tr><th>PR Number</th><th>Item</th><th>Qty</th><th>Status</th><th></th></tr></thead>
           <tbody>
@@ -2179,8 +2185,8 @@ function viewMyRequests(){
             </tr>`).join('')}
           </tbody>
         </table>
-      </div>
-    </div>`).join('')}
+      </div>` : ''}
+    </div>`;}).join('')}
   `;
 }
 
@@ -2397,6 +2403,7 @@ function viewApprovedRequests(){
   const myApprovalFilter = role==='director' ? (it)=>it.dirApprovedReq : role==='vp' ? (it)=>it.vpApprovedReq : (it)=>it.dirApprovedReq && it.vpApprovedReq;
   const all = flatItems((pr,it)=>myApprovalFilter(it) && !it.cancelled);
   const list = all.filter(row=>matchItemRow(row, ui.search.approved));
+  const groups = groupRowsByPR(list);
   return `
   <div class="hero" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
     <div><h1>Approved requests</h1><p>Every item that has cleared Window 1 (Director &amp; VP Finance), regardless of where it sits in the pipeline now.</p></div>
@@ -2405,20 +2412,42 @@ function viewApprovedRequests(){
   ${searchInput('approvedSearch', ui.search.approved, 'Search PR number, item, requestor, vendor…', 'setApprovedQuery')}
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>PR number</th><th>Item</th><th>Requestor</th><th>Method</th><th>Vendor</th><th>Total</th><th>Current status</th><th></th></tr></thead>
+      <thead><tr><th></th><th>PR number</th><th>Item</th><th>Requestor</th><th>Method</th><th>Vendor</th><th>Total</th><th>Current status</th><th></th></tr></thead>
       <tbody>
-        ${list.length===0 ? `<tr class="empty-row"><td colspan="8">${all.length===0?'No requests approved yet.':'No matches for your search.'}</td></tr>` :
-        list.map(row=>`
-          <tr>
-            <td class="pr-code">${row.pr.prNumber}</td>
-            <td>${esc(itemLabel(row.it))}</td>
-            <td>${esc(row.pr.requestorName)}</td>
+        ${groups.length===0 ? `<tr class="empty-row"><td colspan="9">${all.length===0?'No requests approved yet.':'No matches for your search.'}</td></tr>` :
+        groups.map(g=>{
+          const open = !!ui.expandedPRs[g.pr.id];
+          const multi = g.rows.length>1;
+          const first = g.rows[0].it;
+          const summaryItem = multi ? `${g.rows.length} items` : itemLabel(first);
+          const summaryMethod = multi ? (g.rows.every(r=>r.it.procurementApproach===first.procurementApproach) ? (first.procurementApproach||'—') : 'Mixed') : (first.procurementApproach||'—');
+          const summaryVendor = multi ? (g.rows.every(r=>r.it.vendor===first.vendor) ? (first.vendor||'—') : 'Mixed') : (first.vendor||'—');
+          const summaryTotal = g.rows.reduce((s,r)=>s+(itemTotal(r.it)||0),0);
+          const summaryStatus = multi ? (g.rows.every(r=>itemStatusText(r.it)===itemStatusText(first)) ? itemBadge(first) : '<span class="badge b-neutral">Mixed</span>') : itemBadge(first);
+          return `
+          <tr style="cursor:${multi?'pointer':'default'};" ${multi?`onclick="togglePRExpand('${g.pr.id}')"`:''}>
+            <td style="width:20px;color:var(--text-faint);">${multi?(open?'▾':'▸'):''}</td>
+            <td class="pr-code">${g.pr.prNumber}</td>
+            <td>${esc(summaryItem)}</td>
+            <td>${esc(g.pr.requestorName)}</td>
+            <td>${esc(summaryMethod)}</td>
+            <td>${esc(summaryVendor)}</td>
+            <td>${money(summaryTotal)}</td>
+            <td>${summaryStatus}</td>
+            <td>${multi?'':`<button class="btn btn-sm" onclick="openItem('${g.rows[0].pr.id}',${g.rows[0].idx})">Open</button>`}</td>
+          </tr>
+          ${multi && open ? g.rows.map(row=>`
+          <tr style="background:var(--panel-2);">
+            <td></td>
+            <td></td>
+            <td style="padding-left:22px;">${esc(itemLabel(row.it))}</td>
+            <td></td>
             <td>${esc(row.it.procurementApproach||'—')}</td>
             <td>${esc(row.it.vendor||'—')}</td>
             <td>${money(itemTotal(row.it))}</td>
             <td>${itemBadge(row.it)}</td>
-            <td><button class="btn btn-sm" onclick="openItem('${row.pr.id}',${row.idx})">Open</button></td>
-          </tr>`).join('')}
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${row.pr.id}',${row.idx})">Open</button></td>
+          </tr>`).join('') : ''}`;}).join('')}
       </tbody>
     </table>
   </div>`;
@@ -2525,23 +2554,42 @@ function applyAEFFilter(list){
 function viewHeldCancelled(){
   const all = flatItems((pr,it)=>it.held||it.cancelled);
   const list = all.filter(row=>matchItemRow(row, ui.search.proc));
+  const groups = groupRowsByPR(list);
   return `
   <div class="hero"><h1>Held &amp; rejected items</h1><p>Items paused or rejected by an approver at Window 1.</p></div>
   ${searchInput('procSearch', ui.search.proc, 'Search PR number, item, requestor…', 'setProcQuery')}
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>PR number</th><th>Item</th><th>Requestor</th><th>Note</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th></th><th>PR number</th><th>Item</th><th>Requestor</th><th>Note</th><th>Status</th><th></th></tr></thead>
       <tbody>
-        ${list.length===0 ? `<tr class="empty-row"><td colspan="6">${all.length===0?'Nothing held or rejected.':'No matches for your search.'}</td></tr>` :
-        list.map(row=>`
-          <tr>
-            <td class="pr-code">${row.pr.prNumber}</td>
-            <td>${esc(itemLabel(row.it))}</td>
-            <td>${esc(row.pr.requestorName)}</td>
+        ${groups.length===0 ? `<tr class="empty-row"><td colspan="7">${all.length===0?'Nothing held or rejected.':'No matches for your search.'}</td></tr>` :
+        groups.map(g=>{
+          const open = !!ui.expandedPRs[g.pr.id];
+          const multi = g.rows.length>1;
+          const first = g.rows[0].it;
+          const summaryItem = multi ? `${g.rows.length} items` : itemLabel(first);
+          const summaryNote = multi ? (g.rows.every(r=>(r.it.cancelNote||r.it.heldNote)===(first.cancelNote||first.heldNote)) ? (first.cancelNote||first.heldNote||'—') : 'Mixed') : (first.cancelNote||first.heldNote||'—');
+          const summaryStatus = multi ? (g.rows.every(r=>itemStatusText(r.it)===itemStatusText(first)) ? itemBadge(first) : '<span class="badge b-neutral">Mixed</span>') : itemBadge(first);
+          return `
+          <tr style="cursor:${multi?'pointer':'default'};" ${multi?`onclick="togglePRExpand('${g.pr.id}')"`:''}>
+            <td style="width:20px;color:var(--text-faint);">${multi?(open?'▾':'▸'):''}</td>
+            <td class="pr-code">${g.pr.prNumber}</td>
+            <td>${esc(summaryItem)}</td>
+            <td>${esc(g.pr.requestorName)}</td>
+            <td>${esc(summaryNote)}</td>
+            <td>${summaryStatus}</td>
+            <td>${multi?'':`<button class="btn btn-sm" onclick="openItem('${g.rows[0].pr.id}',${g.rows[0].idx})">Open</button>`}</td>
+          </tr>
+          ${multi && open ? g.rows.map(row=>`
+          <tr style="background:var(--panel-2);">
+            <td></td>
+            <td></td>
+            <td style="padding-left:22px;">${esc(itemLabel(row.it))}</td>
+            <td></td>
             <td>${esc(row.it.cancelNote||row.it.heldNote||'—')}</td>
             <td>${itemBadge(row.it)}</td>
-            <td><button class="btn btn-sm" onclick="openItem('${row.pr.id}',${row.idx})">Open</button></td>
-          </tr>`).join('')}
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${row.pr.id}',${row.idx})">Open</button></td>
+          </tr>`).join('') : ''}`;}).join('')}
       </tbody>
     </table>
   </div>`;
@@ -2874,26 +2922,43 @@ function setVendorPickQuery(v){ ui.search.vendorpick=v; rerenderKeepFocus(render
 function viewVendorPick(){
   const all = flatItems((pr,it)=>it.stage==='FOR_DIRECTOR_VENDOR_SELECTION' && !it.cancelled);
   const list = all.filter(row=>matchItemRow(row, ui.search.vendorpick));
+  const groups = groupRowsByPR(list);
   return `
   <div class="hero"><h1>For Vendor Selection</h1><p>Procurement has gathered vendor quotes for these items. Pick the winning vendor for each — it goes back to Procurement once selected.</p></div>
   ${searchInput('vendorPickSearch', ui.search.vendorpick, 'Search PR number, item, vendor…', 'setVendorPickQuery')}
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>PR number</th><th>Item</th><th>Requestor</th><th>Quotes</th><th>Lowest quote</th><th></th></tr></thead>
+      <thead><tr><th></th><th>PR number</th><th>Item</th><th>Requestor</th><th>Quotes</th><th>Lowest quote</th><th></th></tr></thead>
       <tbody>
-        ${list.length===0 ? `<tr class="empty-row"><td colspan="6">${all.length===0?'Nothing awaiting your vendor pick.':'No matches for your search.'}</td></tr>` :
-        list.map(row=>{
-          const it=row.it;
-          const lowest = it.canvassVendors.reduce((min,v)=> (min===null || v.price<min) ? v.price : min, null);
+        ${groups.length===0 ? `<tr class="empty-row"><td colspan="7">${all.length===0?'Nothing awaiting your vendor pick.':'No matches for your search.'}</td></tr>` :
+        groups.map(g=>{
+          const open = !!ui.expandedPRs[g.pr.id];
+          const multi = g.rows.length>1;
+          const first = g.rows[0].it;
+          const lowestFor = (it)=>it.canvassVendors.reduce((min,v)=> (min===null || v.price<min) ? v.price : min, null);
+          const summaryItem = multi ? `${g.rows.length} items` : itemLabel(first);
+          const summaryQuotes = multi ? g.rows.reduce((s,r)=>s+r.it.canvassVendors.length,0) : first.canvassVendors.length;
+          const summaryLowest = multi ? '—' : money(lowestFor(first));
           return `
-          <tr>
-            <td class="pr-code">${row.pr.prNumber}</td>
-            <td>${esc(itemLabel(it))}</td>
-            <td>${esc(row.pr.requestorName)}</td>
-            <td>${it.canvassVendors.length}</td>
-            <td>${money(lowest)}</td>
-            <td><button class="btn btn-sm" onclick="openItem('${row.pr.id}',${row.idx})">Review</button></td>
-          </tr>`;}).join('')}
+          <tr style="cursor:${multi?'pointer':'default'};" ${multi?`onclick="togglePRExpand('${g.pr.id}')"`:''}>
+            <td style="width:20px;color:var(--text-faint);">${multi?(open?'▾':'▸'):''}</td>
+            <td class="pr-code">${g.pr.prNumber}</td>
+            <td>${esc(summaryItem)}</td>
+            <td>${esc(g.pr.requestorName)}</td>
+            <td>${summaryQuotes}</td>
+            <td>${summaryLowest}</td>
+            <td>${multi?'':`<button class="btn btn-sm" onclick="openItem('${g.rows[0].pr.id}',${g.rows[0].idx})">Review</button>`}</td>
+          </tr>
+          ${multi && open ? g.rows.map(row=>`
+          <tr style="background:var(--panel-2);">
+            <td></td>
+            <td></td>
+            <td style="padding-left:22px;">${esc(itemLabel(row.it))}</td>
+            <td></td>
+            <td>${row.it.canvassVendors.length}</td>
+            <td>${money(lowestFor(row.it))}</td>
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${row.pr.id}',${row.idx})">Review</button></td>
+          </tr>`).join('') : ''}`;}).join('')}
       </tbody>
     </table>
   </div>`;
@@ -2902,27 +2967,45 @@ function setVendorHistoryQuery(v){ ui.search.vendorhistory=v; rerenderKeepFocus(
 function viewVendorHistory(){
   const all = flatItems((pr,it)=>!!it.vendorSelectedBy);
   const list = all.filter(row=>matchItemRow(row, ui.search.vendorhistory));
+  const groups = groupRowsByPR(list);
   return `
   <div class="hero"><h1>Vendor selection history</h1><p>Every canvass-sheet vendor pick made so far, and who made it.</p></div>
   ${searchInput('vendorHistorySearch', ui.search.vendorhistory||'', 'Search PR number, item, vendor…', 'setVendorHistoryQuery')}
   <div class="tbl-wrap">
     <table>
-      <thead><tr><th>PR number</th><th>Item</th><th>Quotes compared</th><th>Winning vendor</th><th>Unit price</th><th>Selected by</th><th>When</th><th></th></tr></thead>
+      <thead><tr><th></th><th>PR number</th><th>Item</th><th>Quotes compared</th><th>Winning vendor</th><th>Unit price</th><th>Selected by</th><th>When</th><th></th></tr></thead>
       <tbody>
-        ${list.length===0 ? `<tr class="empty-row"><td colspan="8">${all.length===0?'No vendor selections recorded yet.':'No matches for your search.'}</td></tr>` :
-        list.map(row=>{
-          const it=row.it;
+        ${groups.length===0 ? `<tr class="empty-row"><td colspan="9">${all.length===0?'No vendor selections recorded yet.':'No matches for your search.'}</td></tr>` :
+        groups.map(g=>{
+          const open = !!ui.expandedPRs[g.pr.id];
+          const multi = g.rows.length>1;
+          const first = g.rows[0].it;
+          const summaryItem = multi ? `${g.rows.length} items` : itemLabel(first);
+          const summaryVendor = multi ? (g.rows.every(r=>r.it.vendor===first.vendor) ? (first.vendor||'—') : 'Mixed') : (first.vendor||'—');
           return `
-          <tr>
-            <td class="pr-code">${row.pr.prNumber}</td>
-            <td>${esc(itemLabel(it))}</td>
-            <td>${it.canvassVendors.length}</td>
-            <td>${esc(it.vendor||'—')}</td>
-            <td>${money(it.unitPrice)}</td>
-            <td>${esc(it.vendorSelectedBy||'—')}${it.vendorSelectedRole?` (${esc(roleLabel(it.vendorSelectedRole))})`:''}</td>
-            <td>${esc(it.vendorSelectedAt||'—')}</td>
-            <td><button class="btn btn-sm" onclick="openItem('${row.pr.id}',${row.idx})">Open</button></td>
-          </tr>`;}).join('')}
+          <tr style="cursor:${multi?'pointer':'default'};" ${multi?`onclick="togglePRExpand('${g.pr.id}')"`:''}>
+            <td style="width:20px;color:var(--text-faint);">${multi?(open?'▾':'▸'):''}</td>
+            <td class="pr-code">${g.pr.prNumber}</td>
+            <td>${esc(summaryItem)}</td>
+            <td>${multi?'—':first.canvassVendors.length}</td>
+            <td>${esc(summaryVendor)}</td>
+            <td>${multi?'—':money(first.unitPrice)}</td>
+            <td>${multi?'—':(esc(first.vendorSelectedBy||'—')+(first.vendorSelectedRole?` (${esc(roleLabel(first.vendorSelectedRole))})`:''))}</td>
+            <td>${multi?'—':esc(first.vendorSelectedAt||'—')}</td>
+            <td>${multi?'':`<button class="btn btn-sm" onclick="openItem('${g.rows[0].pr.id}',${g.rows[0].idx})">Open</button>`}</td>
+          </tr>
+          ${multi && open ? g.rows.map(row=>`
+          <tr style="background:var(--panel-2);">
+            <td></td>
+            <td></td>
+            <td style="padding-left:22px;">${esc(itemLabel(row.it))}</td>
+            <td>${row.it.canvassVendors.length}</td>
+            <td>${esc(row.it.vendor||'—')}</td>
+            <td>${money(row.it.unitPrice)}</td>
+            <td>${esc(row.it.vendorSelectedBy||'—')}${row.it.vendorSelectedRole?` (${esc(roleLabel(row.it.vendorSelectedRole))})`:''}</td>
+            <td>${esc(row.it.vendorSelectedAt||'—')}</td>
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${row.pr.id}',${row.idx})">Open</button></td>
+          </tr>`).join('') : ''}`;}).join('')}
       </tbody>
     </table>
   </div>`;
