@@ -1385,8 +1385,9 @@ let ui = { procTab:'New Requests', procSection:'pipeline', apprWindow:'req', apT
   approvedTab:'requests',
   openItem:null, openDoc:null,
   search:{ proc:'', vendors:'', myReq:'', appr1:'', appr2:'', apPending:'', apHistory:'', approved:'', catalog:'', vendorpick:'', vendorhistory:'' },
-  poFilter:{ site:'', month:'', vendor:'', item:'' },
-  aefFilter:{ site:'', month:'', item:'' },
+  poFilter:{ site:'', dateFrom:'', dateTo:'', vendor:'', item:'' },
+  aefFilter:{ site:'', dateFrom:'', dateTo:'', item:'' },
+  reqFilter:{ site:'', dateFrom:'', dateTo:'', item:'' },
   expandedVendors:{}, expandedPRs:{}, expandedCategories:{} };
 
 const SESSION_KEY = 'pclProcurexSession';
@@ -1436,10 +1437,25 @@ async function doLogin(){
   }
   currentUser = { name: match.name, role: match.role, email: match.email, site: match.site, signature: match.signature||null };
   saveSession(currentUser);
+  await flushAllDirtySaves(); // safety net — makes sure nothing from a prior session on this tab gets lost
   await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase()]);
+  subscribeToRealtimeUpdates();
   enterApp();
 }
-function doLogout(){
+// Forces every pending debounced save (PRs, POs, AEFs, vendors) to happen right now instead of
+// waiting out its debounce timer. Called before logging out or loading fresh data from a new
+// login, so a validation/edit made seconds ago can never get silently overwritten by data loaded
+// for a different account switching in on the same tab.
+async function flushAllDirtySaves(){
+  if(prSyncTimer){ clearTimeout(prSyncTimer); prSyncTimer=null; }
+  if(poSyncTimer){ clearTimeout(poSyncTimer); poSyncTimer=null; }
+  if(aefSyncTimer){ clearTimeout(aefSyncTimer); aefSyncTimer=null; }
+  if(vendorSyncTimer){ clearTimeout(vendorSyncTimer); vendorSyncTimer=null; }
+  await Promise.all([flushDirtyPRs(), flushDirtyPOs(), flushDirtyAEFs(), flushDirtyVendors()]);
+}
+async function doLogout(){
+  await flushAllDirtySaves(); // make sure nothing recent is lost before switching accounts
+  if(realtimeChannel && sb){ sb.removeChannel(realtimeChannel); realtimeChannel = null; }
   currentUser = null; ui.openItem=null; ui.openDoc=null;
   clearSession();
   try{ sessionStorage.removeItem(NAV_KEY); }catch(e){}
@@ -1561,15 +1577,39 @@ async function renumberPRs(){
     for(const pr of PRS) await savePRToSupabase(pr);
   }
 }
-// Poll for changes made by other people. Skipped while a drawer/modal is open so
-// it doesn't yank the screen out from under someone mid-edit.
-setInterval(async ()=>{
+// Shared refresh: pulls current PR/PO/AEF/catalog/vendor/account/site data and re-renders.
+// Skipped while a drawer/modal is open, or a save is about to go out, so it never yanks the
+// screen out from under someone mid-edit or clobbers an in-flight save.
+async function refreshEverythingIfSafe(){
   if(!sb || !currentUser) return;
   if(ui.openItem || ui.openDoc) return;
-  if(dirtyPRIds.size || dirtyPOIds.size || dirtyAEFIds.size || dirtyVendorIds.size) return; // don't clobber a save that's about to go out
+  if(dirtyPRIds.size || dirtyPOIds.size || dirtyAEFIds.size || dirtyVendorIds.size) return;
   await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase()]);
   renderSidebar(); renderContent();
-}, 20000);
+}
+// Fallback poll, in case a realtime push is ever missed (dropped connection, etc.)
+setInterval(refreshEverythingIfSafe, 20000);
+
+// Real-time: Supabase pushes a notification the instant a row changes on these tables, instead
+// of the app having to ask periodically. A short debounce just avoids doing five refreshes back
+// to back when a single save touches a PR plus several of its items at once.
+let realtimeChannel = null, realtimeDebounceTimer = null;
+function scheduleRealtimeRefresh(){
+  if(realtimeDebounceTimer) clearTimeout(realtimeDebounceTimer);
+  realtimeDebounceTimer = setTimeout(refreshEverythingIfSafe, 400);
+}
+function subscribeToRealtimeUpdates(){
+  if(!sb || realtimeChannel) return; // already subscribed, or Supabase not available
+  realtimeChannel = sb.channel('procurex-live-updates')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'purchase_requests' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pr_items' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'purchase_orders' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'po_lines' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'aefs' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors' }, scheduleRealtimeRefresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vendor_items' }, scheduleRealtimeRefresh)
+    .subscribe();
+}
 
 function getPO(id){ const po = POS.find(p=>p.id===id); if(po) markPODirty(id); return po; }
 function signatureForName(name){ if(!name) return null; const acct = ACCOUNTS.find(a=>a.name===name); return acct ? acct.signature : null; }
@@ -2408,7 +2448,7 @@ function exportApprovedRequestsCSV(){
   const eligiblePRIds = new Set(
     PRS.filter(pr=>pr.items.some(it=>it.dirApprovedReq && it.vpApprovedReq && !it.cancelled)).map(pr=>pr.id)
   );
-  const all = flatItems((pr)=>eligiblePRIds.has(pr.id));
+  const all = applyReqFilter(flatItems((pr)=>eligiblePRIds.has(pr.id)));
   const headers = ['PR Number','Site','Requestor','Date Submitted','Date Needed','Purpose',
     'Item No','Item Description','Category','Item Type','Qty','UOM','Unit Price','Total Price',
     'Procurement Method','Vendor','Current Status','Director Approver','VP Approver'];
@@ -2455,13 +2495,15 @@ function viewApprovedRequests(){
   const role = currentUser.role;
   const myApprovalFilter = role==='director' ? (it)=>it.dirApprovedReq : role==='vp' ? (it)=>it.vpApprovedReq : (it)=>it.dirApprovedReq && it.vpApprovedReq;
   const all = flatItems((pr,it)=>myApprovalFilter(it) && !it.cancelled);
-  const list = all.filter(row=>matchItemRow(row, ui.search.approved));
+  const filteredByBar = applyReqFilter(all);
+  const list = filteredByBar.filter(row=>matchItemRow(row, ui.search.approved));
   const groups = groupRowsByPR(list);
   return `
   <div class="hero" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
     <div><h1>Approved requests</h1><p>Every item that has cleared Window 1 (Director &amp; VP Finance), regardless of where it sits in the pipeline now.</p></div>
     <button class="btn btn-primary" onclick="exportApprovedRequestsCSV()">⬇ Export to Excel</button>
   </div>
+  ${filterBarHtml('req', ui.reqFilter)}
   ${searchInput('approvedSearch', ui.search.approved, 'Search PR number, item, requestor, vendor…', 'setApprovedQuery')}
   <div class="tbl-wrap">
     <table>
@@ -2565,32 +2607,50 @@ function viewApprovedAEF(){
 function setApprovedQuery(v){ ui.search.approved=v; rerenderKeepFocus(renderContent); }
 function setPOFilter(field, v){ ui.poFilter[field]=v; renderContent(); }
 function setAEFFilter(field, v){ ui.aefFilter[field]=v; renderContent(); }
-function clearPOFilter(){ ui.poFilter={site:'',month:'',vendor:'',item:''}; renderContent(); }
-function clearAEFFilter(){ ui.aefFilter={site:'',month:'',item:''}; renderContent(); }
-const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function setReqFilter(field, v){ ui.reqFilter[field]=v; renderContent(); }
+function clearPOFilter(){ ui.poFilter={site:'',dateFrom:'',dateTo:'',vendor:'',item:''}; renderContent(); }
+function clearAEFFilter(){ ui.aefFilter={site:'',dateFrom:'',dateTo:'',item:''}; renderContent(); }
+function clearReqFilter(){ ui.reqFilter={site:'',dateFrom:'',dateTo:'',item:''}; renderContent(); }
 function filterBarHtml(kind, f){
   const siteOpts = SITES.map(s=>`<option value="${esc(s.label)}" ${f.site===s.label?'selected':''}>${esc(s.label)}</option>`).join('');
-  const monthOpts = MONTH_ABBR.map(m=>`<option value="${m}" ${f.month===m?'selected':''}>${m}</option>`).join('');
-  const setFn = kind==='po' ? 'setPOFilter' : 'setAEFFilter';
-  const clearFn = kind==='po' ? 'clearPOFilter' : 'clearAEFFilter';
+  const setFn = kind==='po' ? 'setPOFilter' : kind==='aef' ? 'setAEFFilter' : 'setReqFilter';
+  const clearFn = kind==='po' ? 'clearPOFilter' : kind==='aef' ? 'clearAEFFilter' : 'clearReqFilter';
   return `
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0;">
     <select onchange="${setFn}('site', this.value)" style="font-size:12px;padding:4px 6px;">
       <option value="">All sites</option>${siteOpts}
     </select>
-    <select onchange="${setFn}('month', this.value)" style="font-size:12px;padding:4px 6px;">
-      <option value="">All months</option>${monthOpts}
-    </select>
+    <label style="font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:4px;">From
+      <input type="date" value="${esc(f.dateFrom)}" onchange="${setFn}('dateFrom', this.value)" style="font-size:12px;padding:4px 6px;">
+    </label>
+    <label style="font-size:12px;color:var(--text-faint);display:flex;align-items:center;gap:4px;">To
+      <input type="date" value="${esc(f.dateTo)}" onchange="${setFn}('dateTo', this.value)" style="font-size:12px;padding:4px 6px;">
+    </label>
     ${kind==='po' ? `<input placeholder="Vendor name…" value="${esc(f.vendor)}" oninput="${setFn}('vendor', this.value)" style="font-size:12px;padding:4px 6px;">` : ''}
-    <input placeholder="${kind==='po'?'Item…':'Particulars…'}" value="${esc(f.item)}" oninput="${setFn}('item', this.value)" style="font-size:12px;padding:4px 6px;">
+    <input placeholder="${kind==='aef'?'Particulars…':'Item…'}" value="${esc(f.item)}" oninput="${setFn}('item', this.value)" style="font-size:12px;padding:4px 6px;">
     <button class="btn btn-sm" onclick="${clearFn}()">Clear filters</button>
   </div>`;
+}
+// The app stores dates as display strings like "Jul 31, 2026" — this parses one into a
+// real Date for range comparisons against the plain "YYYY-MM-DD" values <input type="date"> gives.
+function parseStoredDate(str){
+  if(!str) return null;
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+function inDateRange(dateStr, fromStr, toStr){
+  if(!fromStr && !toStr) return true;
+  const d = parseStoredDate(dateStr);
+  if(!d) return true; // can't parse it — don't hide it, just skip this filter for that row
+  if(fromStr){ const f = new Date(fromStr); if(d < f) return false; }
+  if(toStr){ const t = new Date(toStr); t.setHours(23,59,59,999); if(d > t) return false; }
+  return true;
 }
 function applyPOFilter(list){
   const f = ui.poFilter;
   return list.filter(po=>
     (!f.site || po.shipTo===f.site) &&
-    (!f.month || (po.poDate||'').startsWith(f.month)) &&
+    inDateRange(po.poDate, f.dateFrom, f.dateTo) &&
     (!f.vendor || (po.vendorName||'').toLowerCase().includes(f.vendor.toLowerCase())) &&
     (!f.item || po.lines.some(l=>(l.description||'').toLowerCase().includes(f.item.toLowerCase())))
   );
@@ -2599,8 +2659,16 @@ function applyAEFFilter(list){
   const f = ui.aefFilter;
   return list.filter(aef=>
     (!f.site || aef.department===f.site) &&
-    (!f.month || (aef.date||'').startsWith(f.month)) &&
+    inDateRange(aef.date, f.dateFrom, f.dateTo) &&
     (!f.item || (aef.particulars||'').toLowerCase().includes(f.item.toLowerCase()))
+  );
+}
+function applyReqFilter(rows){
+  const f = ui.reqFilter;
+  return rows.filter(row=>
+    (!f.site || siteLabel(row.pr.site)===f.site) &&
+    inDateRange(row.pr.dateSubmitted, f.dateFrom, f.dateTo) &&
+    (!f.item || itemLabel(row.it).toLowerCase().includes(f.item.toLowerCase()))
   );
 }
 
@@ -2786,6 +2854,10 @@ function showAddVendorForm(){
 function showEditVendorForm(vendorId){
   const v = getVendor(vendorId);
   if(!v) return;
+  renderEditVendorForm(v);
+  refreshSingleVendor(vendorId).then(()=>{ const fresh=getVendor(vendorId); if(fresh) renderEditVendorForm(fresh); });
+}
+function renderEditVendorForm(v){
   formModal(`Edit vendor — ${v.name}`, `
     <div class="stack">
       <div class="field"><label>Vendor name</label><input id="vName" value="${esc(v.name)}" placeholder="e.g. TirePro Industrial Supply"></div>
@@ -2843,6 +2915,13 @@ function showEditVendorItemForm(vendorId, itemId){
   if(!v) return;
   const it = v.items.find(i=>i.id===itemId);
   if(!it) return;
+  renderEditVendorItemForm(v, it);
+  refreshSingleVendor(vendorId).then(()=>{
+    const freshV = getVendor(vendorId); if(!freshV) return;
+    const freshIt = freshV.items.find(i=>i.id===itemId); if(freshIt) renderEditVendorItemForm(freshV, freshIt);
+  });
+}
+function renderEditVendorItemForm(v, it){
   formModal(`Edit item — ${v.name}`, `
     <div class="stack">
       <div class="field"><label>Item / description</label><input id="viName" value="${esc(it.name)}" placeholder="e.g. Diesel forklift tire (each)"></div>
@@ -3270,6 +3349,19 @@ async function refreshSingleAEF(aefId){
     const i = AEFS.findIndex(a=>a.id===aefId);
     if(i>=0) AEFS[i] = freshAEF; else AEFS.unshift(freshAEF);
   }catch(e){ console.error('refreshSingleAEF failed', e); }
+}
+async function refreshSingleVendor(vendorId){
+  if(!sb) return;
+  try{
+    const [{ data: vRow, error: e1 }, { data: itemRows, error: e2 }] = await Promise.all([
+      sb.from('vendors').select('*').eq('id', vendorId).single(),
+      sb.from('vendor_items').select('*').eq('vendor_id', vendorId),
+    ]);
+    if(e1 || !vRow || e2) return;
+    const freshVendor = rowToVendor(vRow, itemRows||[]);
+    const i = VENDORS.findIndex(v=>v.id===vendorId);
+    if(i>=0) VENDORS[i] = freshVendor; else VENDORS.unshift(freshVendor);
+  }catch(e){ console.error('refreshSingleVendor failed', e); }
 }
 function openItem(prId, idx){
   ui.openItem={prId,idx}; ui.openDoc=null; renderDrawer(); document.getElementById('overlay').classList.add('show');
@@ -4744,6 +4836,7 @@ async function restoreSessionOnLoad(){
   try{
     await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase(), minDelay]);
   }catch(e){ /* the load functions already surface their own error toasts */ }
+  subscribeToRealtimeUpdates();
   showSessionLoadingBar(false);
   enterApp();
 }
