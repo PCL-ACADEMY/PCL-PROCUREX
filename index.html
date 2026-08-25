@@ -1470,7 +1470,7 @@ async function doLogout(){
 /* ============================================================
    HELPERS
    ============================================================ */
-function getPR(id){ return PRS.find(p=>p.id===id); }
+function getPR(id){ const pr = PRS.find(p=>p.id===id); if(pr) markPRDirty(id); return pr; }
 
 /* ============================================================
    SUPABASE SYNC — Purchase Requests + items
@@ -1491,7 +1491,7 @@ async function flushDirtyPRs(){
   const ids = Array.from(dirtyPRIds);
   dirtyPRIds.clear();
   for(const id of ids){
-    const pr = getPR(id);
+    const pr = PRS.find(p=>p.id===id);
     if(pr) await savePRToSupabase(pr);
   }
 }
@@ -1585,6 +1585,10 @@ async function refreshEverythingIfSafe(){
   if(ui.openItem || ui.openDoc) return;
   if(dirtyPRIds.size || dirtyPOIds.size || dirtyAEFIds.size || dirtyVendorIds.size) return;
   await Promise.all([loadAllPRsFromSupabase(), loadAllPOsFromSupabase(), loadAllAEFsFromSupabase(), loadItemCatalogFromSupabase(), loadAllVendorsFromSupabase(), loadAllAccountsFromSupabase(), loadAllSitesFromSupabase()]);
+  // Re-check: someone may have opened a drawer or started an edit while that fetch was in
+  // flight (it's a network round-trip, not instant). If so, skip the render this time — the
+  // fresh data is already loaded and will show correctly next time nothing is open.
+  if(ui.openItem || ui.openDoc) return;
   renderSidebar(); renderContent();
 }
 // Fallback poll, in case a realtime push is ever missed (dropped connection, etc.)
@@ -4002,11 +4006,11 @@ function markAEFDirty(id){
 }
 async function flushDirtyPOs(){
   const ids = Array.from(dirtyPOIds); dirtyPOIds.clear();
-  for(const id of ids){ const po = getPO(id); if(po) await savePOToSupabase(po); }
+  for(const id of ids){ const po = POS.find(p=>p.id===id); if(po) await savePOToSupabase(po); }
 }
 async function flushDirtyAEFs(){
   const ids = Array.from(dirtyAEFIds); dirtyAEFIds.clear();
-  for(const id of ids){ const aef = getAEF(id); if(aef) await saveAEFToSupabase(aef); }
+  for(const id of ids){ const aef = AEFS.find(a=>a.id===id); if(aef) await saveAEFToSupabase(aef); }
 }
 function poLineRowId(poId, idx){ return poId + '#' + idx; }
 function poToRow(po){
