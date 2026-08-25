@@ -3554,6 +3554,7 @@ function showValidationFormForGroup(prId, idxs){
         it.stage='UNDER_REVIEW';
         it.audit.push(logEntry(`Validation started — classified as ${type}`));
       });
+      markPRDirty(prId);
       renderAll();
     }, multi ? `Begin validation (${items.length} items)` : 'Begin validation');
 }
@@ -3561,7 +3562,7 @@ function showValidationFormForGroup(prId, idxs){
 function showCanvassForm(prId, idx){
   const {pr,it} = findItem(prId,idx);
   formModal('Create canvass sheet', `<p class="help">This creates a canvass sheet for "${esc(itemLabel(it))}" on ${pr.prNumber}. Add vendor quotes on the next step.</p>`,
-    ()=>{ it.stage='CANVASSING'; it.procurementApproach='Canvass / RFQ'; it.audit.push(logEntry('Canvass sheet created')); renderAll(); },
+    ()=>{ it.stage='CANVASSING'; it.procurementApproach='Canvass / RFQ'; it.audit.push(logEntry('Canvass sheet created')); markPRDirty(prId); renderAll(); },
     'Create canvass sheet');
 }
 function showAddQuoteForm(prId, idx){
@@ -3650,6 +3651,7 @@ function showEditQuoteForm(prId, idx, quoteIdx){
       q.leadTime = document.getElementById('eqLead').value;
       q.quotationLink = document.getElementById('eqQuoteLink').value.trim();
       it.audit.push(logEntry(`Vendor quote updated: ${q.name}${q.itemName?` — ${q.itemName}`:''} (${money(price)}/unit)`));
+      markPRDirty(prId);
       renderAll();
     }, 'Save changes');
 }
@@ -3721,6 +3723,7 @@ function showSelectWinnerForm(prId, idx){
       it.audit.push(logEntry(byDirector
         ? `Winning vendor selected by Purchasing Director: ${name} (${money(it.unitPrice)}/unit) — returned to Procurement`
         : `Vendor selected: ${name} (${money(it.unitPrice)}/unit)`));
+      markPRDirty(prId);
       renderAll();
     }, 'Confirm selection');
 }
@@ -3864,6 +3867,7 @@ function showSubmitRecForm(prId, idx){
       it.stage='AWAITING_APPROVAL_REQ'; it.dirApprovedReq=false; it.vpApprovedReq=false;
       it.preparedBy=currentUser.name;
       it.audit.push(logEntry('Submitted for Director & VP Finance approval'));
+      markPRDirty(prId);
       renderAll();
     }, 'Submit for approval');
 }
@@ -4785,6 +4789,7 @@ function showReleaseForm(id){
       aef.status='BUDGET_RELEASED';
       aef.audit.push(logEntry(`Budget released: ${money(aef.releasedAmount)} (ref: ${aef.releaseReference||'—'}) — proof saved to shared drive`));
       cascadeItemStage(aef,true);
+      markAEFDirty(id);
       renderAll();
     }, 'Confirm release');
 }
