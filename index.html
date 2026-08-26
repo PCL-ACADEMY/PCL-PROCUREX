@@ -3367,16 +3367,19 @@ async function refreshSingleVendor(vendorId){
     if(i>=0) VENDORS[i] = freshVendor; else VENDORS.unshift(freshVendor);
   }catch(e){ console.error('refreshSingleVendor failed', e); }
 }
+let formModalActive = false;
 function openItem(prId, idx){
+  formModalActive = false;
   ui.openItem={prId,idx}; ui.openDoc=null; renderDrawer(); document.getElementById('overlay').classList.add('show');
-  refreshSinglePR(prId).then(()=>{ if(ui.openItem && ui.openItem.prId===prId && ui.openItem.idx===idx) renderDrawer(); });
+  refreshSinglePR(prId).then(()=>{ if(!formModalActive && ui.openItem && ui.openItem.prId===prId && ui.openItem.idx===idx) renderDrawer(); });
 }
 function openDoc(type, id){
+  formModalActive = false;
   ui.openDoc={type,id}; ui.openItem=null; renderDrawer(); document.getElementById('overlay').classList.add('show');
   const refresh = type==='PO' ? refreshSinglePO : refreshSingleAEF;
-  refresh(id).then(()=>{ if(ui.openDoc && ui.openDoc.type===type && ui.openDoc.id===id) renderDrawer(); });
+  refresh(id).then(()=>{ if(!formModalActive && ui.openDoc && ui.openDoc.type===type && ui.openDoc.id===id) renderDrawer(); });
 }
-function closeDrawer(){ document.getElementById('overlay').classList.remove('show'); ui.openItem=null; ui.openDoc=null; }
+function closeDrawer(){ document.getElementById('overlay').classList.remove('show'); ui.openItem=null; ui.openDoc=null; formModalActive=false; }
 
 function renderDrawer(){
   if(ui.openDoc) return renderDocDrawer();
@@ -4796,6 +4799,7 @@ function showReleaseForm(id){
 
 /* ---------- generic form modal (reuses overlay/drawer) ---------- */
 function formModal(title, bodyHtml, onConfirm, confirmLabel){
+  formModalActive = true;
   const d = document.getElementById('drawer');
   d.innerHTML = `
     <div class="drawer-head"><div><h2 style="margin:0;">${esc(title)}</h2></div><button class="drawer-close" onclick="closeDrawer()">&times;</button></div>
