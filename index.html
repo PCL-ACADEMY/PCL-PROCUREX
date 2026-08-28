@@ -197,6 +197,8 @@ tbody tr:hover{background:var(--panel-2);}
 /* form card */
 .form-card{border:1px solid var(--border);background:var(--panel-2);border-radius:4px;padding:16px 18px;}
 .form-card + .form-card{margin-top:12px;}
+.form-card-narrow{max-width:calc(100% - 96px);}
+@media(max-width:820px){ .form-card-narrow{max-width:100%;} }
 .help{font-size:11.5px;color:var(--text-faint);margin-top:4px;}
 
 /* printable PO / AEF documents */
@@ -247,6 +249,21 @@ tbody tr:hover{background:var(--panel-2);}
   .login-brand-row{gap:8px;}
   .login-brand-row img{height:30px;}
   .login-brand-row .co-name{font-size:9.5px;letter-spacing:.05em;}
+
+  .topbar{height:auto;min-height:52px;flex-wrap:wrap;padding:8px 10px;row-gap:6px;}
+  .topbar-left{gap:6px;}
+  .topbar-left img{height:24px;}
+  .topbar-title{font-size:12px;}
+  .topbar-tagline{display:none;}
+  .topbar-right{gap:8px;}
+  .user-chip{gap:6px;font-size:11.5px;}
+  .user-chip .av{width:22px;height:22px;font-size:10px;}
+  .user-chip .role{display:none;}
+  .user-chip #userName{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .topbar .btn-sm{padding:5px 9px;font-size:11px;}
+  .content{padding:14px 12px 50px;}
+  .hero h1{font-size:17px;}
+  .form-card{padding:14px 12px;}
 }
 </style>
 </head>
@@ -2099,7 +2116,7 @@ function viewNewRequest(){
   ensureNrDraft();
   return `
   <div class="hero"><h1>New purchase request</h1><p>Submitted requests are noted by you as Department Head, then routed automatically to Procurement.</p></div>
-  <div class="form-card" style="max-width:calc(100% - 96px);">
+  <div class="form-card form-card-narrow">
     <div class="stack">
       <div class="kv" style="background:var(--panel);border:1px solid var(--border-soft);border-radius:3px;padding:12px 14px;">
         <div><div class="k">Site</div><div class="v">${esc(siteLabel(currentUser.site))}</div></div>
@@ -2183,7 +2200,7 @@ function viewNewRequestProc(){
   ensureNpDraft();
   return `
   <div class="hero"><h1>New purchase request</h1><p>Create a request on behalf of a site (e.g. phoned-in or walk-in requests). Pick the owning site below — that site's requestor account will see this request, and its live status, under "My requests".</p></div>
-  <div class="form-card" style="max-width:calc(100% - 96px);">
+  <div class="form-card form-card-narrow">
     <div class="stack">
       <div class="grid2">
         <div class="field"><label>Requisitioner name</label><input id="npReqName" placeholder="Full name of the staff member requesting" value="${esc(npDraft.requestorName)}" oninput="npDraft.requestorName=this.value"></div>
