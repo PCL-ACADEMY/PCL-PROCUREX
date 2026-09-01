@@ -2463,12 +2463,20 @@ function computeHomeStats(monthKey, siteFilter){
   const topCost = Object.entries(itemCosts).sort((a,b)=>b[1]-a[1])[0] || null;
   // Category breakdown always includes every catalog category (even ones with zero activity this
   // month/site), plus any category name found on an item that no longer matches the live catalog.
+  // Same for items within a category: every catalog item is listed (0 requests / ₱0 if it hasn't
+  // been ordered this month/site), plus any item name found in actual requests that isn't in the
+  // live catalog (e.g. a manually-typed description, or an item since removed from the catalog).
   const catalogNames = ITEM_CATEGORIES.map(c=>c.name);
   const allCatNames = new Set([...catalogNames, ...Object.keys(catStats)]);
+  const catalogItemsByCategory = {};
+  ITEM_CATEGORIES.forEach(c=>{ catalogItemsByCategory[c.name] = c.items; });
   const categoryBreakdown = Array.from(allCatNames).map(name=>{
     const d = catStats[name] || { count:0, cost:0, items:{} };
-    const items = Object.entries(d.items).map(([label,v])=>({ label, count:v.count, cost:v.cost }))
-      .sort((a,b)=>b.cost-a.cost || b.count-a.count);
+    const itemNames = new Set([...(catalogItemsByCategory[name]||[]), ...Object.keys(d.items)]);
+    const items = Array.from(itemNames).map(label=>{
+      const v = d.items[label] || { count:0, cost:0 };
+      return { label, count:v.count, cost:v.cost };
+    }).sort((a,b)=>b.cost-a.cost || b.count-a.count || a.label.localeCompare(b.label));
     return { name, count:d.count, cost:d.cost, items };
   }).sort((a,b)=>b.cost-a.cost || b.count-a.count);
   return { rowCount: rows.length, topRequested, topCost, siteRanking, totalCost, maxSiteCost, topSite, newCount, repeatCount, otherCount, categoryBreakdown };
