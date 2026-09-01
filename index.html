@@ -1415,9 +1415,9 @@ function categoryItems(name){ const c=categoryByName(name); return c ? c.items :
    SESSION
    ============================================================ */
 let ui = { procTab:'New Requests', procSection:'pipeline', apprWindow:'req', apTab:'pending', reqTab:'pending',
-  approvedTab:'requests',
+  approvedTab:'requests', allReqStatus:'all',
   openItem:null, openDoc:null,
-  search:{ proc:'', vendors:'', myReq:'', appr1:'', appr2:'', apPending:'', apHistory:'', approved:'', catalog:'', vendorpick:'', vendorhistory:'' },
+  search:{ proc:'', vendors:'', myReq:'', appr1:'', appr2:'', apPending:'', apHistory:'', approved:'', catalog:'', vendorpick:'', vendorhistory:'', allReq:'' },
   poFilter:{ site:'', dateFrom:'', dateTo:'', vendor:'', item:'' },
   aefFilter:{ site:'', dateFrom:'', dateTo:'', item:'' },
   reqFilter:{ site:'', dateFrom:'', dateTo:'', item:'' },
@@ -1531,7 +1531,7 @@ async function flushDirtyPRs(){
 function prItemRowId(prId, idx){ return prId + '#' + idx; }
 function prToRow(pr){
   return { id: pr.id, pr_number: pr.prNumber, site: pr.site, requestor_name: pr.requestorName,
-    noted_by: pr.notedBy, purpose: pr.purpose,
+    noted_by: pr.notedBy, signature: pr.signature, purpose: pr.purpose,
     date_submitted: pr.dateSubmitted, required_date: pr.requiredDate, audit: pr.audit||[] };
 }
 function itemToRow(pr, it, idx){
@@ -1568,7 +1568,7 @@ function rowToPR(row, itemRows){
     return ai-bi;
   });
   return makePR({ id: row.id, prNumber: row.pr_number, site: row.site, requestorName: row.requestor_name,
-    notedBy: row.noted_by, purpose: row.purpose,
+    notedBy: row.noted_by, signature: row.signature, purpose: row.purpose,
     dateSubmitted: row.date_submitted, requiredDate: row.required_date, audit: row.audit||[],
     items: itemRows.map(rowToItem) });
 }
@@ -1787,6 +1787,8 @@ function rerenderKeepFocus(fn){
   }
 }
 function setProcQuery(v){ ui.search.proc=v; rerenderKeepFocus(renderContent); }
+function setAllReqQuery(v){ ui.search.allReq=v; rerenderKeepFocus(renderContent); }
+function setAllReqStatus(k){ ui.allReqStatus=k; saveNavState(); renderContent(); }
 function setVendorQuery(v){ ui.search.vendors=v; rerenderKeepFocus(renderContent); }
 function setMyReqQuery(v){ ui.search.myReq=v; rerenderKeepFocus(renderContent); }
 function setAppr1Query(v){ ui.search.appr1=v; rerenderKeepFocus(renderContent); }
@@ -1921,6 +1923,9 @@ function renderSidebar(){
       {k:'po', label:'Approved POs', count:approvedPOCount},
       {k:'aef', label:'Approved AEFs', count:approvedAEFCount},
     ], ui.procSection==='approved'?ui.approvedTab:null, "setApprovedTab");
+    html += navGroup('Reports', [
+      {k:'all', label:'All Requests', count: flatItems(null).length},
+    ], ui.procSection==='all'?'all':null, "setProcSection");
     html += navGroup('Catalogs', [
       {k:'vendors', label:'Vendors', count: VENDORS.length},
       {k:'catalog', label:'Item catalog', count: ITEM_CATEGORIES.length},
@@ -1968,7 +1973,7 @@ const NAV_KEY = 'pclProcurexNav';
 function saveNavState(){
   try{ sessionStorage.setItem(NAV_KEY, JSON.stringify({
     procTab: ui.procTab, procSection: ui.procSection, apprWindow: ui.apprWindow,
-    apTab: ui.apTab, reqTab: ui.reqTab, approvedTab: ui.approvedTab,
+    apTab: ui.apTab, reqTab: ui.reqTab, approvedTab: ui.approvedTab, allReqStatus: ui.allReqStatus,
   })); }catch(e){}
 }
 function restoreNavState(){
@@ -1991,7 +1996,7 @@ function renderContent(){
   const role = currentUser.role;
   const el = document.getElementById('content');
   if(role==='requestor') el.innerHTML = ui.reqTab==='new' ? viewNewRequest() : viewMyRequests();
-  else if(role==='procurement') el.innerHTML = ui.procSection==='vendors' ? viewVendors() : ui.procSection==='catalog' ? viewItemCatalog() : ui.procSection==='new' ? viewNewRequestProc() : ui.procSection==='approved' ? viewApproved() : viewProcurement();
+  else if(role==='procurement') el.innerHTML = ui.procSection==='vendors' ? viewVendors() : ui.procSection==='catalog' ? viewItemCatalog() : ui.procSection==='new' ? viewNewRequestProc() : ui.procSection==='approved' ? viewApproved() : ui.procSection==='all' ? viewAllRequestsProc() : viewProcurement();
   else if(role==='director' || role==='vp') el.innerHTML = ui.apprWindow==='req' ? viewApprovalWindow1() : ui.apprWindow==='vendorpick' ? viewVendorPick() : ui.apprWindow==='vendorhistory' ? viewVendorHistory() : ui.apprWindow==='po' ? viewApprovalWindowPO() : ui.apprWindow==='aef' ? viewApprovalWindowAEF() : ui.apprWindow==='approved-req' ? viewApprovedRequests() : ui.apprWindow==='approved-po' ? viewApprovedPO() : viewApprovedAEF();
   else if(role==='accounting') el.innerHTML = ui.apTab==='pending' ? viewAPPending() : viewAPHistory();
 }
@@ -2262,6 +2267,13 @@ function itemStatusBucket(it){
   if(it.stage==='DELIVERED') return 'done';
   return 'pending';
 }
+/* four broad buckets for the Procurement "All Requests" report: new / ongoing / delivered / held-rejected */
+function itemMasterBucket(it){
+  if(it.cancelled || it.held) return 'held';
+  if(it.stage==='RECEIVED') return 'new';
+  if(it.stage==='DELIVERED') return 'delivered';
+  return 'ongoing';
+}
 function viewMyRequests(){
   const bucket = ui.reqTab==='new' ? 'pending' : ui.reqTab;
   const bucketMeta = {
@@ -2458,6 +2470,91 @@ function viewApproved(){
   if(ui.approvedTab==='po') return viewApprovedPO();
   if(ui.approvedTab==='aef') return viewApprovedAEF();
   return viewApprovedRequests();
+}
+/* ---------- All Requests (Procurement report): every item, every stage, one place ---------- */
+const ALL_REQ_STATUS_META = {
+  all:{ label:'All' }, new:{ label:'New' }, ongoing:{ label:'Ongoing' },
+  delivered:{ label:'Delivered' }, held:{ label:'Held / Rejected' },
+};
+function viewAllRequestsProc(){
+  const bucket = ui.allReqStatus || 'all';
+  const counts = { all:0, new:0, ongoing:0, delivered:0, held:0 };
+  const everything = flatItems(null);
+  everything.forEach(row=>{ counts.all++; counts[itemMasterBucket(row.it)]++; });
+  const inBucket = bucket==='all' ? everything : everything.filter(row=>itemMasterBucket(row.it)===bucket);
+  const list = inBucket.filter(row=>matchItemRow(row, ui.search.allReq));
+  const groups = groupRowsByPR(list);
+  return `
+  <div class="hero"><h1>All Requests</h1><p>Every purchase request item across every site and stage — new, ongoing, and delivered — in one place. Export the current view to Excel any time.</p></div>
+  <div class="tabbar">
+    ${Object.keys(ALL_REQ_STATUS_META).map(k=>`
+      <div class="tab ${k===bucket?'active':''}" style="cursor:pointer;" onclick="setAllReqStatus('${k}')">
+        <span>${ALL_REQ_STATUS_META[k].label}</span><span class="n">${counts[k]}</span>
+      </div>`).join('')}
+  </div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px;">
+    <button class="btn btn-primary" onclick="exportAllRequestsCSV()">⬇ Export to Excel</button>
+  </div>
+  ${searchInput('allReqSearch', ui.search.allReq, 'Search PR number, item, requestor, site, vendor…', 'setAllReqQuery')}
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th></th><th>PR number</th><th>Item</th><th>Type</th><th>Qty</th><th>Requestor</th><th>Site</th><th>Date Requested</th><th>Date Needed</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        ${groups.length===0 ? `<tr class="empty-row"><td colspan="10">${everything.length===0?'No purchase requests have been made yet.':'No matches for this filter / search.'}</td></tr>` :
+        groups.map(g=>{
+          const open = !!ui.expandedPRs[g.pr.id];
+          const multi = g.rows.length>1;
+          const summaryItem = multi ? `${g.rows.length} items` : itemLabel(g.rows[0].it);
+          const summaryQty = multi ? '—' : `${g.rows[0].it.qty} ${esc(g.rows[0].it.uom)}`;
+          const summaryType = multi ? (g.rows.every(r=>r.it.requestType===g.rows[0].it.requestType) ? (g.rows[0].it.requestType||'—') : 'Mixed') : (g.rows[0].it.requestType||'—');
+          return `
+          <tr style="cursor:${multi?'pointer':'default'};" ${multi?`onclick="togglePRExpand('${g.pr.id}')"`:''}>
+            <td style="width:20px;color:var(--text-faint);">${multi?(open?'▾':'▸'):''}</td>
+            <td class="pr-code">${g.pr.prNumber}</td>
+            <td>${esc(summaryItem)}</td>
+            <td>${esc(summaryType)}</td>
+            <td>${summaryQty}</td>
+            <td>${esc(g.pr.requestorName)}</td>
+            <td>${esc(siteLabel(g.pr.site))}</td>
+            <td>${esc(g.pr.dateSubmitted)}</td>
+            <td>${esc(g.pr.requiredDate)||'—'}</td>
+            <td>${groupStatusCell(g)}</td>
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${g.rows[0].pr.id}',${g.rows[0].idx})">Open</button></td>
+          </tr>
+          ${multi && open ? g.rows.map(row=>`
+          <tr style="background:var(--panel-2);">
+            <td></td>
+            <td></td>
+            <td style="padding-left:22px;">${esc(itemLabel(row.it))}</td>
+            <td>${esc(row.it.requestType||'—')}</td>
+            <td>${row.it.qty} ${esc(row.it.uom)}</td>
+            <td colspan="2" style="color:var(--text-faint);font-size:12px;">${esc(row.pr.requestorName)} · ${esc(siteLabel(row.pr.site))}</td>
+            <td>${esc(row.pr.dateSubmitted)}</td>
+            <td>${esc(row.pr.requiredDate)||'—'}</td>
+            <td>${itemBadge(row.it)}</td>
+            <td><button class="btn btn-sm" onclick="event.stopPropagation();openItem('${row.pr.id}',${row.idx})">Open</button></td>
+          </tr>`).join('') : ''}`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+function exportAllRequestsCSV(){
+  const bucket = ui.allReqStatus || 'all';
+  const everything = flatItems(null);
+  const inBucket = bucket==='all' ? everything : everything.filter(row=>itemMasterBucket(row.it)===bucket);
+  const all = inBucket.filter(row=>matchItemRow(row, ui.search.allReq));
+  const headers = ['PR Number','Site','Requestor','Date Submitted','Date Needed','Purpose',
+    'Item No','Item Description','Category','Item Type','Request Type','Qty','UOM','Unit Price','Total Price',
+    'Procurement Method','Vendor','Current Status','Director Approver','VP Approver'];
+  const rows = all.map(row=>{
+    const {pr, it} = row;
+    return [pr.prNumber, siteLabel(pr.site), pr.requestorName, pr.dateSubmitted, pr.requiredDate, pr.purpose,
+      it.itemNo, itemLabel(it), it.category, it.itemType, it.requestType||'', it.qty, it.uom, it.unitPrice, itemTotal(it),
+      it.method||'', it.vendor, itemStatusText(it), it.dirApproverName, it.vpApproverName];
+  });
+  const suffix = bucket==='all' ? 'All' : ALL_REQ_STATUS_META[bucket].label.replace(/[\s/]+/g,'_');
+  downloadCSV(`All_Requests_${suffix}_${todayStr().replace(/[, ]+/g,'_')}.csv`, headers, rows);
 }
 /* ---------- Excel (CSV) export — item/line-level rows, one per row, with shared header details repeated ---------- */
 function csvCell(val){
