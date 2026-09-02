@@ -2599,8 +2599,8 @@ function deliveryStatusFor(it){
   const days = Math.round((new Date(todayStr())-startD)/86400000);
   return days>slaDays ? { status:'MISS', slaDays, days, reason:'overdue' } : { status:'PENDING', slaDays, days, reason:'in-progress' };
 }
-function computeDeliveryPerformance(siteFilter){
-  const rows = flatItems((pr)=> !siteFilter || pr.site===siteFilter);
+function computeDeliveryPerformance(monthKey, siteFilter){
+  const rows = flatItems((pr)=> monthKeyOf(pr.dateSubmitted)===monthKey && (!siteFilter || pr.site===siteFilter));
   const result = {
     'New Request': { hit:0, miss:0, pending:0, missList:[] },
     'Repeat Order': { hit:0, miss:0, pending:0, missList:[] },
@@ -2649,7 +2649,7 @@ function viewProcHome(){
   const monthKey = (ui.homeMonth && months.includes(ui.homeMonth)) ? ui.homeMonth : (months[0] || monthKeyOf(todayStr()));
   const siteFilter = ui.homeSite || '';
   const stats = computeHomeStats(monthKey, siteFilter);
-  const deliveryPerf = computeDeliveryPerformance(siteFilter);
+  const deliveryPerf = computeDeliveryPerformance(monthKey, siteFilter);
   const scopeLabel = siteFilter ? siteLabel(siteFilter) : 'All Sites';
   const siteOptions = SITES.slice().sort((a,b)=>a.label.localeCompare(b.label));
   return `
@@ -2688,7 +2688,7 @@ function viewProcHome(){
     <h2>New Request vs Repeat Order — ${esc(monthLabelOf(monthKey))}${siteFilter?` <span style="font-weight:400;color:var(--text-faint);">(${esc(scopeLabel)})</span>`:''}</h2>
     ${typeDonutChart(stats.newCount, stats.repeatCount, stats.otherCount)}
     <div style="margin-top:18px;">
-      <div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);">Delivery performance${siteFilter?` — ${esc(scopeLabel)}`:''} <span style="text-transform:none;letter-spacing:0;">(all-time, not limited to ${esc(monthLabelOf(monthKey))})</span></div>
+      <div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);">Delivery performance${siteFilter?` — ${esc(scopeLabel)}`:''} <span style="text-transform:none;letter-spacing:0;">(requests submitted in ${esc(monthLabelOf(monthKey))} — delivery may still be in progress past month-end)</span></div>
       ${deliveryPerfBlock('New Request', deliveryPerf['New Request'])}
       ${deliveryPerfBlock('Repeat Order', deliveryPerf['Repeat Order'])}
     </div>
