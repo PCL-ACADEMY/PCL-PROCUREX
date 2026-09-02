@@ -264,7 +264,8 @@ tbody tr:hover{background:var(--panel-2);}
   #app-screen{height:auto;min-height:100vh;overflow:visible;}
   .layout{flex-direction:column;min-height:0;}
   .sidebar{width:100%;height:auto;overflow-y:visible;border-right:none;border-bottom:1px solid var(--sidebar-border);display:flex;overflow-x:auto;padding:8px;}
-  .sidebar .grp-label{display:none;}
+  .sidebar .grp-label{display:none !important;}
+  .sidebar .grp-body{max-height:none !important;overflow:visible;display:flex;}
   .nav-item{border-left:none;border-bottom:2px solid transparent;white-space:nowrap;}
   .nav-item.active{border-bottom-color:var(--accent);}
   .content{height:auto;overflow-y:visible;padding:20px 16px 60px;}
