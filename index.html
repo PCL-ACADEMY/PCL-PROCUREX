@@ -138,6 +138,7 @@ tbody tr:hover{background:var(--panel-2);}
 .b-wait{color:var(--warn);border-color:#eecfa0;background:#fdf3e2;}
 .b-good{color:var(--good);border-color:#bfe2cb;background:#eaf7ee;}
 .b-bad{color:var(--bad);border-color:#f0c3c0;background:#fbeceb;}
+.b-warn{color:var(--warn);border-color:#f0dcb0;background:#fbf3e3;}
 
 /* search bar */
 .search-wrap{margin-bottom:14px;}
@@ -2631,7 +2632,7 @@ function deliveryPerfBlock(label, stats){
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-bottom:${stats.missList.length?'8px':'0'};">
       <div><span class="badge b-good">HIT</span> <span style="font-family:var(--mono);">${stats.hit}</span></div>
       <div><span class="badge b-bad">MISS</span> <span style="font-family:var(--mono);">${stats.miss}</span></div>
-      <div><span class="badge b-neutral">PENDING</span> <span style="font-family:var(--mono);">${stats.pending}</span></div>
+      <div><span class="badge b-warn">PENDING</span> <span style="font-family:var(--mono);">${stats.pending}</span></div>
     </div>
     ${stats.missList.length ? `
     <div style="margin-top:6px;">
