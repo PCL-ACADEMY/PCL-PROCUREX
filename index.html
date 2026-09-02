@@ -460,7 +460,7 @@ function makeReqItem(o){
     vendorSelectedBy:null, vendorSelectedAt:null, vendorSelectedRole:null,
     dirApprovedReq:false, vpApprovedReq:false,
     dirApproverName:null, dirSignature:null, vpApproverName:null, vpSignature:null,
-    docId:null, docType:null, transmittalSent:false,
+    docId:null, docType:null, transmittalSent:false, deliveredDate:null,
     audit:[],
   }, o);
 }
@@ -486,7 +486,7 @@ function makePO(o){
     id:'po'+Math.random().toString(36).slice(2,9),
     poNumber: nextPONumber(), poDate: todayStr(),
     vendorName:'', vendorContact:'', vendorEmail:'', vendorAddress:'', shipTo:'',
-    lines:[], taxRate:0.12, taxType:'vat_goods', message:'', note:'', checkedBy:null, emailComposed:false, submittedForApprovalDate:null,
+    lines:[], taxRate:0.12, taxType:'vat_goods', message:'', note:'', checkedBy:null, emailComposed:false, emailComposedDate:null, submittedForApprovalDate:null,
     status:'DRAFT', // DRAFT -> AWAITING_APPROVAL_DOC -> DOC_APPROVED -> PO_SENT -> IN_TRANSIT -> DELIVERED / CANCELLED
     dirApprovedDoc:false, vpApprovedDoc:false,
     dirApproverName:null, dirSignature:null, dirApprovedDate:null,
@@ -1581,7 +1581,7 @@ function itemToRow(pr, it, idx){
     dir_approved_req: it.dirApprovedReq, vp_approved_req: it.vpApprovedReq,
     dir_approver_name: it.dirApproverName, dir_signature: it.dirSignature,
     vp_approver_name: it.vpApproverName, vp_signature: it.vpSignature,
-    doc_id: it.docId, doc_type: it.docType, transmittal_sent: it.transmittalSent,
+    doc_id: it.docId, doc_type: it.docType, transmittal_sent: it.transmittalSent, delivered_date: it.deliveredDate,
     audit: it.audit||[], canvass_vendors: it.canvassVendors||[] };
 }
 function rowToItem(row){
@@ -1595,7 +1595,7 @@ function rowToItem(row){
     dirApprovedReq: row.dir_approved_req, vpApprovedReq: row.vp_approved_req,
     dirApproverName: row.dir_approver_name, dirSignature: row.dir_signature,
     vpApproverName: row.vp_approver_name, vpSignature: row.vp_signature,
-    docId: row.doc_id, docType: row.doc_type, transmittalSent: row.transmittal_sent, audit: row.audit||[] });
+    docId: row.doc_id, docType: row.doc_type, transmittalSent: row.transmittal_sent, deliveredDate: row.delivered_date||null, audit: row.audit||[] });
 }
 function rowToPR(row, itemRows){
   itemRows = itemRows.slice().sort((a,b)=>{
@@ -2563,11 +2563,93 @@ function typeDonutChart(newCount, repeatCount, otherCount){
     </div>
   </div>`;
 }
+/* ---------- Delivery performance (HIT / MISS / PENDING) ----------
+   "Clock start" is when the delivery-affecting event happened: the PO email
+   was composed (po.emailComposedDate), or the AEF budget was released
+   (aef.releaseDate). SLA: New Request = 35 days, Repeat Order = 20 days,
+   both counted from that clock start to actual delivery (it.deliveredDate).
+   HIT = delivered within the SLA. MISS = delivered late, or not yet
+   delivered and already past the SLA (overdue). PENDING = either the clock
+   hasn't started yet (PO not sent / budget not released), or it has but is
+   still within the allowed window and not yet delivered. Cancelled/held
+   items are excluded — there's nothing to hold to a delivery SLA. */
+function deliverySlaDays(requestType){
+  if(requestType==='Repeat Order') return 20;
+  if(requestType==='New Request') return 35;
+  return null;
+}
+function deliveryClockStart(it){
+  if(!it.docId) return null;
+  if(it.docType==='PO'){ const po = POS.find(p=>p.id===it.docId); return po ? (po.emailComposedDate||null) : null; }
+  if(it.docType==='AEF'){ const aef = AEFS.find(a=>a.id===it.docId); return aef ? (aef.releaseDate||null) : null; }
+  return null;
+}
+function deliveryStatusFor(it){
+  const slaDays = deliverySlaDays(it.requestType);
+  if(slaDays==null || it.cancelled || it.held) return null;
+  const clockStart = deliveryClockStart(it);
+  const startD = clockStart ? new Date(clockStart) : null;
+  if(!startD || isNaN(startD)) return { status:'PENDING', slaDays, reason:'awaiting-start' };
+  if(it.stage==='DELIVERED' && it.deliveredDate){
+    const doneD = new Date(it.deliveredDate);
+    if(isNaN(doneD)) return { status:'PENDING', slaDays, reason:'awaiting-start' };
+    const days = Math.round((doneD-startD)/86400000);
+    return days<=slaDays ? { status:'HIT', slaDays, days } : { status:'MISS', slaDays, days, reason:'late-delivery' };
+  }
+  const days = Math.round((new Date(todayStr())-startD)/86400000);
+  return days>slaDays ? { status:'MISS', slaDays, days, reason:'overdue' } : { status:'PENDING', slaDays, days, reason:'in-progress' };
+}
+function computeDeliveryPerformance(siteFilter){
+  const rows = flatItems((pr)=> !siteFilter || pr.site===siteFilter);
+  const result = {
+    'New Request': { hit:0, miss:0, pending:0, missList:[] },
+    'Repeat Order': { hit:0, miss:0, pending:0, missList:[] },
+  };
+  rows.forEach(({pr,it})=>{
+    const bucket = result[it.requestType];
+    if(!bucket) return;
+    const res = deliveryStatusFor(it);
+    if(!res) return;
+    if(res.status==='HIT') bucket.hit++;
+    else if(res.status==='MISS'){
+      bucket.miss++;
+      bucket.missList.push({ prNumber:pr.prNumber, label:itemLabel(it), days:res.days, slaDays:res.slaDays, overdueOnly:res.reason==='overdue' });
+    } else bucket.pending++;
+  });
+  Object.values(result).forEach(b=>b.missList.sort((a,b2)=>(b2.days-b2.slaDays)-(a.days-a.slaDays)));
+  return result;
+}
+function deliveryPerfBlock(label, stats){
+  const total = stats.hit + stats.miss + stats.pending;
+  const rate = (stats.hit+stats.miss)>0 ? Math.round(stats.hit/(stats.hit+stats.miss)*100) : null;
+  return `
+  <div style="border-top:1px solid var(--border-soft);padding-top:12px;margin-top:12px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+      <div style="font-weight:600;font-size:13px;">${esc(label)}</div>
+      <div style="font-size:11.5px;color:var(--text-faint);">${total} tracked${rate!=null?` · ${rate}% on-time`:''}</div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-bottom:${stats.missList.length?'8px':'0'};">
+      <div><span class="badge b-good">HIT</span> <span style="font-family:var(--mono);">${stats.hit}</span></div>
+      <div><span class="badge b-bad">MISS</span> <span style="font-family:var(--mono);">${stats.miss}</span></div>
+      <div><span class="badge b-neutral">PENDING</span> <span style="font-family:var(--mono);">${stats.pending}</span></div>
+    </div>
+    ${stats.missList.length ? `
+    <div style="margin-top:6px;">
+      ${stats.missList.slice(0,6).map(m=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--text-dim);padding:3px 0;">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.prNumber)} · ${esc(m.label)}</span>
+        <span style="font-family:var(--mono);color:var(--maroon);flex:none;">${m.overdueOnly?'still out':'took'} ${m.days}d <span style="color:var(--text-faint);">(SLA ${m.slaDays}d)</span></span>
+      </div>`).join('')}
+      ${stats.missList.length>6 ? `<div style="font-size:11px;color:var(--text-faint);margin-top:2px;">+ ${stats.missList.length-6} more</div>` : ''}
+    </div>` : ''}
+  </div>`;
+}
 function viewProcHome(){
   const months = availableHomeMonths();
   const monthKey = (ui.homeMonth && months.includes(ui.homeMonth)) ? ui.homeMonth : (months[0] || monthKeyOf(todayStr()));
   const siteFilter = ui.homeSite || '';
   const stats = computeHomeStats(monthKey, siteFilter);
+  const deliveryPerf = computeDeliveryPerformance(siteFilter);
   const scopeLabel = siteFilter ? siteLabel(siteFilter) : 'All Sites';
   const siteOptions = SITES.slice().sort((a,b)=>a.label.localeCompare(b.label));
   return `
@@ -2605,6 +2687,11 @@ function viewProcHome(){
   <div class="home-panel">
     <h2>New Request vs Repeat Order — ${esc(monthLabelOf(monthKey))}${siteFilter?` <span style="font-weight:400;color:var(--text-faint);">(${esc(scopeLabel)})</span>`:''}</h2>
     ${typeDonutChart(stats.newCount, stats.repeatCount, stats.otherCount)}
+    <div style="margin-top:18px;">
+      <div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);">Delivery performance${siteFilter?` — ${esc(scopeLabel)}`:''} <span style="text-transform:none;letter-spacing:0;">(all-time, not limited to ${esc(monthLabelOf(monthKey))})</span></div>
+      ${deliveryPerfBlock('New Request', deliveryPerf['New Request'])}
+      ${deliveryPerfBlock('Repeat Order', deliveryPerf['Repeat Order'])}
+    </div>
   </div>
   <div class="home-panel">
     <h2>Sites' Contribution to Overall Expenses — ${esc(monthLabelOf(monthKey))}${siteFilter?` <span style="font-weight:400;color:var(--text-faint);">(${esc(scopeLabel)} highlighted)</span>`:''}</h2>
@@ -4317,6 +4404,7 @@ function confirmItemDeliveredGated(prId, idx){
 function confirmItemDelivered(prId, idx){
   const {it} = findItem(prId,idx);
   it.stage='DELIVERED';
+  it.deliveredDate = todayStr();
   it.audit.push(logEntry('Delivery confirmed by requestor'));
   if(it.docId){
     const doc = it.docType==='PO' ? getPO(it.docId) : getAEF(it.docId);
@@ -4459,7 +4547,7 @@ function poToRow(po){
   return { id: po.id, po_number: po.poNumber, po_date: po.poDate, vendor_name: po.vendorName,
     vendor_contact: po.vendorContact, vendor_email: po.vendorEmail, vendor_address: po.vendorAddress, ship_to: po.shipTo,
     tax_rate: po.taxRate, tax_type: po.taxType, message: po.message, note: po.note,
-    checked_by: po.checkedBy, email_composed: po.emailComposed, submitted_for_approval_date: po.submittedForApprovalDate,
+    checked_by: po.checkedBy, email_composed: po.emailComposed, email_composed_date: po.emailComposedDate, submitted_for_approval_date: po.submittedForApprovalDate,
     status: po.status, dir_approved_doc: po.dirApprovedDoc, vp_approved_doc: po.vpApprovedDoc,
     dir_approver_name: po.dirApproverName, dir_signature: po.dirSignature, dir_approved_date: po.dirApprovedDate,
     vp_approver_name: po.vpApproverName, vp_signature: po.vpSignature, vp_approved_date: po.vpApprovedDate,
@@ -4481,7 +4569,7 @@ function rowToPO(row, lineRows){
   return makePO({ id: row.id, poNumber: row.po_number, poDate: row.po_date, vendorName: row.vendor_name,
     vendorContact: row.vendor_contact, vendorEmail: row.vendor_email||'', vendorAddress: row.vendor_address, shipTo: row.ship_to,
     taxRate: row.tax_rate, taxType: row.tax_type, message: row.message||'', note: row.note||'',
-    checkedBy: row.checked_by, emailComposed: row.email_composed, submittedForApprovalDate: row.submitted_for_approval_date,
+    checkedBy: row.checked_by, emailComposed: row.email_composed, emailComposedDate: row.email_composed_date||null, submittedForApprovalDate: row.submitted_for_approval_date,
     status: row.status, dirApprovedDoc: row.dir_approved_doc, vpApprovedDoc: row.vp_approved_doc,
     dirApproverName: row.dir_approver_name, dirSignature: row.dir_signature, dirApprovedDate: row.dir_approved_date,
     vpApproverName: row.vp_approver_name, vpSignature: row.vp_signature, vpApprovedDate: row.vp_approved_date,
@@ -5188,6 +5276,7 @@ async function composePOEmail(id){
   window.open(owaUrl, '_blank', 'noopener');
   await exportPOToPDF(id);
   po.emailComposed = true;
+  if(!po.emailComposedDate) po.emailComposedDate = todayStr();
   po.audit.push(logEntry('Email composed in Outlook (web) for '+po.poNumber+' — PO PDF downloaded for attaching'));
   showToast(cc ? ('PO PDF downloaded. Add to Cc: '+cc) : 'PO PDF downloaded — drag it into the Outlook email to attach.');
   renderDrawer();
