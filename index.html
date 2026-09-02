@@ -484,7 +484,7 @@ function makePO(o){
   return Object.assign({
     id:'po'+Math.random().toString(36).slice(2,9),
     poNumber: nextPONumber(), poDate: todayStr(),
-    vendorName:'', vendorContact:'', vendorAddress:'', shipTo:'',
+    vendorName:'', vendorContact:'', vendorEmail:'', vendorAddress:'', shipTo:'',
     lines:[], taxRate:0.12, taxType:'vat_goods', message:'', note:'', checkedBy:null, emailComposed:false, submittedForApprovalDate:null,
     status:'DRAFT', // DRAFT -> AWAITING_APPROVAL_DOC -> DOC_APPROVED -> PO_SENT -> IN_TRANSIT -> DELIVERED / CANCELLED
     dirApprovedDoc:false, vpApprovedDoc:false,
@@ -1213,7 +1213,7 @@ function makeVendor(o){
   return Object.assign({
     id: 'ven'+seq,
     vendorNumber: 'VEN-'+String(seq).padStart(4,'0'),
-    name:'', contactPerson:'', contact:'', address:'', paymentTerms:'',
+    name:'', contactPerson:'', contact:'', email:'', address:'', paymentTerms:'',
     accreditationStatus:'Pending', accreditationNo:'',
     items: [], // {id, name, price}
   }, o);
@@ -1243,7 +1243,7 @@ async function flushDirtyVendors(){
   for(const id of ids){ const v = VENDORS.find(x=>x.id===id); if(v) await saveVendorToSupabase(v); }
 }
 function vendorToRow(v){
-  return { id: v.id, name: v.name, vendor_number: v.vendorNumber, contact_person: v.contactPerson, contact: v.contact, address: v.address,
+  return { id: v.id, name: v.name, vendor_number: v.vendorNumber, contact_person: v.contactPerson, contact: v.contact, email: v.email, address: v.address,
     payment_terms: v.paymentTerms, accreditation_status: v.accreditationStatus, accreditation_no: v.accreditationNo };
 }
 function vendorItemToRow(vendorId, it){
@@ -1253,7 +1253,7 @@ function rowToVendorItem(row){
   return makeVendorItem({ id: row.id, name: row.name, price: row.price, warranty: row.warranty||'' });
 }
 function rowToVendor(row, itemRows){
-  return makeVendor({ id: row.id, vendorNumber: row.vendor_number, name: row.name, contactPerson: row.contact_person||'', contact: row.contact||'',
+  return makeVendor({ id: row.id, vendorNumber: row.vendor_number, name: row.name, contactPerson: row.contact_person||'', contact: row.contact||'', email: row.email||'',
     address: row.address||'', paymentTerms: row.payment_terms||'', accreditationStatus: row.accreditation_status||'Pending',
     accreditationNo: row.accreditation_no||'', items: itemRows.map(rowToVendorItem) });
 }
@@ -1800,7 +1800,7 @@ function matchDoc(doc, q, isAef){
 function matchVendor(v, q){
   if(!q || !q.trim()) return true;
   const needle = q.trim().toLowerCase();
-  const haystack = [v.vendorNumber, v.id, v.name, v.contactPerson, v.contact, v.address, v.paymentTerms, v.accreditationStatus, v.accreditationNo, ...(v.items||[]).map(it=>it.name)]
+  const haystack = [v.vendorNumber, v.id, v.name, v.contactPerson, v.contact, v.email, v.address, v.paymentTerms, v.accreditationStatus, v.accreditationNo, ...(v.items||[]).map(it=>it.name)]
     .filter(Boolean).join(' | ').toLowerCase();
   return haystack.includes(needle);
 }
@@ -3166,7 +3166,7 @@ function viewVendors(){
           <div>
             <div style="font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.03em;">${esc(v.vendorNumber||'')}</div>
             <div style="font-weight:600;font-size:14.5px;margin-top:2px;display:flex;align-items:center;gap:8px;">${esc(v.name)} ${accreditationBadge(v.accreditationStatus)}</div>
-            <div style="font-size:12px;color:var(--text-faint);margin-top:2px;">${v.contactPerson?`${esc(v.contactPerson)} · `:''}${esc(v.contact||'No contact info on file')}</div>
+            <div style="font-size:12px;color:var(--text-faint);margin-top:2px;">${v.contactPerson?`${esc(v.contactPerson)} · `:''}${esc([v.contact,v.email].filter(Boolean).join(' · ') || 'No contact info on file')}</div>
             <div style="font-size:12px;color:var(--text-faint);">${esc(v.address||'No address on file')}</div>
             <div style="font-size:12px;color:var(--text-faint);">Terms: ${esc(v.paymentTerms||'Not set')}${v.accreditationNo?` · Accreditation No. ${esc(v.accreditationNo)}`:''}</div>
           </div>
@@ -3185,8 +3185,14 @@ function viewVendors(){
           <input value="${esc(v.contactPerson)}" placeholder="e.g. Maria Santos" oninput="updateVendorField('${v.id}','contactPerson',this.value)">
         </div>
         <div class="field" style="margin:0;">
-          <label>Contact info</label>
-          <input value="${esc(v.contact)}" placeholder="Email / phone" oninput="updateVendorField('${v.id}','contact',this.value)">
+          <label>Contact number</label>
+          <input value="${esc(v.contact)}" placeholder="e.g. 0917 123 4567" oninput="updateVendorField('${v.id}','contact',this.value)">
+        </div>
+      </div>
+      <div class="grid2" style="margin-top:12px;gap:16px;" onclick="event.stopPropagation();">
+        <div class="field" style="margin:0;">
+          <label>Email</label>
+          <input type="email" value="${esc(v.email)}" placeholder="e.g. sales@vendor.com" oninput="updateVendorField('${v.id}','email',this.value)">
         </div>
       </div>
       <div class="grid2" style="margin-top:12px;gap:16px;" onclick="event.stopPropagation();">
@@ -3245,7 +3251,10 @@ function showAddVendorForm(){
     <div class="stack">
       <div class="field"><label>Vendor name</label><input id="vName" placeholder="e.g. TirePro Industrial Supply"></div>
       <div class="field"><label>Contact person</label><input id="vContactPerson" placeholder="e.g. Maria Santos"></div>
-      <div class="field"><label>Contact info</label><input id="vContact" placeholder="Email / phone"></div>
+      <div class="grid2">
+        <div class="field" style="margin:0;"><label>Contact number</label><input id="vContact" placeholder="e.g. 0917 123 4567"></div>
+        <div class="field" style="margin:0;"><label>Email</label><input id="vEmail" type="email" placeholder="e.g. sales@vendor.com"></div>
+      </div>
       <div class="field"><label>Address</label><input id="vAddress" placeholder="Street, city, province — used on Purchase Orders"></div>
       <div class="field"><label>Payment terms</label><input id="vTerms" placeholder="e.g. 30 days, COD, 50% down / 50% on delivery"></div>
       <div class="grid2">
@@ -3267,7 +3276,7 @@ function showAddVendorForm(){
     ()=>{
       const name=document.getElementById('vName').value.trim();
       if(!name){ showToast('Enter a vendor name.'); return false; }
-      const nv = makeVendor({name, contactPerson:document.getElementById('vContactPerson').value.trim(), contact:document.getElementById('vContact').value.trim(), address:document.getElementById('vAddress').value.trim(),
+      const nv = makeVendor({name, contactPerson:document.getElementById('vContactPerson').value.trim(), contact:document.getElementById('vContact').value.trim(), email:document.getElementById('vEmail').value.trim(), address:document.getElementById('vAddress').value.trim(),
         paymentTerms:document.getElementById('vTerms').value.trim(), accreditationStatus:document.getElementById('vAccStatus').value,
         accreditationNo:document.getElementById('vAccNo').value.trim()});
       VENDORS.push(nv);
@@ -3287,7 +3296,10 @@ function renderEditVendorForm(v){
     <div class="stack">
       <div class="field"><label>Vendor name</label><input id="vName" value="${esc(v.name)}" placeholder="e.g. TirePro Industrial Supply"></div>
       <div class="field"><label>Contact person</label><input id="vContactPerson" value="${esc(v.contactPerson)}" placeholder="e.g. Maria Santos"></div>
-      <div class="field"><label>Contact info</label><input id="vContact" value="${esc(v.contact)}" placeholder="Email / phone"></div>
+      <div class="grid2">
+        <div class="field" style="margin:0;"><label>Contact number</label><input id="vContact" value="${esc(v.contact)}" placeholder="e.g. 0917 123 4567"></div>
+        <div class="field" style="margin:0;"><label>Email</label><input id="vEmail" type="email" value="${esc(v.email)}" placeholder="e.g. sales@vendor.com"></div>
+      </div>
       <div class="field"><label>Address</label><input id="vAddress" value="${esc(v.address)}" placeholder="Street, city, province — used on Purchase Orders"></div>
       <div class="field"><label>Payment terms</label><input id="vTerms" value="${esc(v.paymentTerms)}" placeholder="e.g. 30 days, COD, 50% down / 50% on delivery"></div>
       <div class="grid2">
@@ -3309,6 +3321,7 @@ function renderEditVendorForm(v){
       v.name = name;
       v.contactPerson = document.getElementById('vContactPerson').value.trim();
       v.contact = document.getElementById('vContact').value.trim();
+      v.email = document.getElementById('vEmail').value.trim();
       v.address = document.getElementById('vAddress').value.trim();
       v.paymentTerms = document.getElementById('vTerms').value.trim();
       v.accreditationStatus = document.getElementById('vAccStatus').value;
@@ -4391,7 +4404,7 @@ function assignItemToPO(pr, it, idx){
   let po = POS.find(p=>p.status==='DRAFT' && p.vendorName===it.vendor);
   if(!po){
     const v = vendorByName(it.vendor);
-    po = makePO({vendorName:it.vendor, vendorContact:v?v.contact:'', vendorAddress:v?v.address:'', shipTo:siteLabel(pr.site), checkedBy:it.preparedBy||(ACCOUNTS.find(a=>a.role==='procurement')||{}).name});
+    po = makePO({vendorName:it.vendor, vendorContact:v?v.contact:'', vendorEmail:v?v.email:'', vendorAddress:v?v.address:'', shipTo:siteLabel(pr.site), checkedBy:it.preparedBy||(ACCOUNTS.find(a=>a.role==='procurement')||{}).name});
     po.audit.push(logEntry('Purchase Order drafted'));
     POS.push(po);
   }
@@ -4443,7 +4456,7 @@ async function flushDirtyAEFs(){
 function poLineRowId(poId, idx){ return poId + '#' + idx; }
 function poToRow(po){
   return { id: po.id, po_number: po.poNumber, po_date: po.poDate, vendor_name: po.vendorName,
-    vendor_contact: po.vendorContact, vendor_address: po.vendorAddress, ship_to: po.shipTo,
+    vendor_contact: po.vendorContact, vendor_email: po.vendorEmail, vendor_address: po.vendorAddress, ship_to: po.shipTo,
     tax_rate: po.taxRate, tax_type: po.taxType, message: po.message, note: po.note,
     checked_by: po.checkedBy, email_composed: po.emailComposed, submitted_for_approval_date: po.submittedForApprovalDate,
     status: po.status, dir_approved_doc: po.dirApprovedDoc, vp_approved_doc: po.vpApprovedDoc,
@@ -4465,7 +4478,7 @@ function rowToPO(row, lineRows){
     return ai-bi;
   });
   return makePO({ id: row.id, poNumber: row.po_number, poDate: row.po_date, vendorName: row.vendor_name,
-    vendorContact: row.vendor_contact, vendorAddress: row.vendor_address, shipTo: row.ship_to,
+    vendorContact: row.vendor_contact, vendorEmail: row.vendor_email||'', vendorAddress: row.vendor_address, shipTo: row.ship_to,
     taxRate: row.tax_rate, taxType: row.tax_type, message: row.message||'', note: row.note||'',
     checkedBy: row.checked_by, emailComposed: row.email_composed, submittedForApprovalDate: row.submitted_for_approval_date,
     status: row.status, dirApprovedDoc: row.dir_approved_doc, vpApprovedDoc: row.vp_approved_doc,
@@ -4615,6 +4628,7 @@ function renderPODrawer(po){
             <div class="print-field"><input value="${esc(po.vendorContact)}" placeholder="Contact person" oninput="updatePOField('${po.id}','vendorContact',this.value)"></div>
             <div class="print-field" style="margin-top:4px;"><input value="${esc(po.vendorName)}" placeholder="Company" oninput="updatePOField('${po.id}','vendorName',this.value)"></div>
             <div class="print-field" style="margin-top:4px;"><input value="${esc(po.vendorAddress)}" placeholder="Address" oninput="updatePOField('${po.id}','vendorAddress',this.value)"></div>
+            <div class="print-field" style="margin-top:4px;"><input type="email" value="${esc(po.vendorEmail)}" placeholder="Email — used for the 'Compose email' To field" oninput="updatePOField('${po.id}','vendorEmail',this.value)"></div>
           </div>
           <div>
             <div class="print-lbl">Ship to</div>
@@ -5133,8 +5147,8 @@ async function composePOEmail(id){
   const po = getPO(id);
   if(!po) return;
   const t = poTotal(po);
-  const toMatch = (po.vendorContact||'').match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
-  const to = toMatch ? toMatch[0] : '';
+  const to = (po.vendorEmail||'').trim();
+  if(!to) showToast(`No email on file for ${po.vendorName} — add one under Vendors to auto-fill "To".`);
   const subject = `Purchase Order ${po.poNumber} — ${po.vendorName}`;
   const bodyLines = [
     `Hi ${po.vendorName} Team,`, '',
