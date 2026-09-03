@@ -91,9 +91,10 @@ input,select,textarea{font-family:var(--sans);}
 
 .layout{display:flex;flex:1;min-height:0;min-width:0;}
 .sidebar{width:220px;flex:none;border-right:1px solid var(--sidebar-border);background:var(--sidebar-bg);padding:16px 0;overflow-y:auto;height:100%;}
-.sidebar .grp-label{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--sidebar-text-faint);padding:4px 18px;margin-top:10px;}
-.sidebar .grp-label.collapsible{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:8px 18px;}
-.sidebar .grp-label.collapsible:hover{color:var(--sidebar-text-dim);}
+.sidebar .grp-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--sidebar-text-dim);padding:4px 18px;margin-top:10px;}
+.sidebar .grp-label.collapsible{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:8px 18px;font-weight:600;}
+.sidebar .grp-label.collapsible:hover{color:var(--sidebar-text);}
+.sidebar .grp-label.collapsible.open{color:var(--sidebar-text);}
 .sidebar .grp-label .chev{font-size:9px;transition:transform .15s ease;}
 .sidebar .grp-label.collapsible.open .chev{transform:rotate(90deg);}
 .sidebar .grp-body{overflow:hidden;max-height:0;transition:max-height .18s ease;}
@@ -1950,25 +1951,25 @@ function renderSidebar(){
     html = `<div class="nav-item ${ui.procSection==='home'?'active':''}" onclick="setProcSection('home')">
       <span>🏠 Home</span>
     </div>`;
-    html += navGroup('Purchase Request',[
+    html += navGroup('📝 Purchase Request',[
       {k:'new', label:'Create New Request'},
-    ], ui.procSection==='new'?'new':null, "setProcSection", {collapsible:true});
-    html += navGroup('Pipeline', PROC_COLUMNS.map(c=>({k:c,label:c,count:columnCount(c)})), ui.procSection==='pipeline'?ui.procTab:null, "setProcTab", {collapsible:true});
+    ], ui.procSection==='new'?'new':null, "setProcSection", {collapsible:true, groupKey:'Purchase Request'});
+    html += navGroup('🔄 Pipeline', PROC_COLUMNS.map(c=>({k:c,label:c,count:columnCount(c)})), ui.procSection==='pipeline'?ui.procTab:null, "setProcTab", {collapsible:true, groupKey:'Pipeline'});
     const approvedReqCount = flatItems((pr,it)=>it.dirApprovedReq && it.vpApprovedReq && !it.cancelled).length;
     const approvedPOCount = POS.filter(p=>p.dirApprovedDoc && p.vpApprovedDoc).length;
     const approvedAEFCount = AEFS.filter(a=>a.dirApprovedDoc && a.vpApprovedDoc).length;
-    html += navGroup('Approved', [
+    html += navGroup('✅ Approved', [
       {k:'requests', label:'Approved requests', count:approvedReqCount},
       {k:'po', label:'Approved POs', count:approvedPOCount},
       {k:'aef', label:'Approved AEFs', count:approvedAEFCount},
-    ], ui.procSection==='approved'?ui.approvedTab:null, "setApprovedTab", {collapsible:true});
-    html += navGroup('Reports', [
+    ], ui.procSection==='approved'?ui.approvedTab:null, "setApprovedTab", {collapsible:true, groupKey:'Approved'});
+    html += navGroup('📊 Reports', [
       {k:'all', label:'All Requests', count: flatItems(null).length},
-    ], ui.procSection==='all'?'all':null, "setProcSection", {collapsible:true});
-    html += navGroup('Catalogs', [
+    ], ui.procSection==='all'?'all':null, "setProcSection", {collapsible:true, groupKey:'Reports'});
+    html += navGroup('📦 Catalogs', [
       {k:'vendors', label:'Vendors', count: VENDORS.length},
       {k:'catalog', label:'Item catalog', count: ITEM_CATEGORIES.length},
-    ], ui.procSection==='vendors'?'vendors':ui.procSection==='catalog'?'catalog':null, "setProcSection", {collapsible:true});
+    ], ui.procSection==='vendors'?'vendors':ui.procSection==='catalog'?'catalog':null, "setProcSection", {collapsible:true, groupKey:'Catalogs'});
   } else if(role==='director' || role==='vp'){
     const reqCount = flatItems((pr,it)=>it.stage==='AWAITING_APPROVAL_REQ' && !it.held && !it.cancelled && !(role==='director'?it.dirApprovedReq:it.vpApprovedReq)).length;
     const poCount = POS.filter(p=>p.status==='AWAITING_APPROVAL_DOC' && !(role==='director'?p.dirApprovedDoc:p.vpApprovedDoc)).length;
